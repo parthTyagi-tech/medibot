@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>MediAssist — AI Health Companion</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,300&display=swap" rel="stylesheet"/>
+</head>
+<body>
+
+  <!-- Ambient background -->
+  <div class="ambient-bg">
+    <div class="orb orb-1"></div>
+    <div class="orb orb-2"></div>
+    <div class="orb orb-3"></div>
+  </div>
+
+  <div class="app-shell">
+
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <div class="sidebar-logo">
+        <div class="logo-icon">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 15v-4H7l5-8v4h4l-5 8z" fill="currentColor"/>
+          </svg>
+        </div>
+        <span class="logo-text">MediAssist</span>
+      </div>
+
+      <button class="new-chat-btn" onclick="clearChat()">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+        </svg>
+        New Consultation
+      </button>
+
+      <div class="sidebar-section-label">Quick Topics</div>
+      <nav class="quick-topics">
+        <button class="topic-btn" onclick="insertPrompt('What are common symptoms of flu vs cold?')">
+          <span class="topic-icon">🤧</span> Flu vs Cold
+        </button>
+        <button class="topic-btn" onclick="insertPrompt('What should I do if I have a fever above 103°F?')">
+          <span class="topic-icon">🌡️</span> High Fever
+        </button>
+        <button class="topic-btn" onclick="insertPrompt('What are healthy blood pressure ranges?')">
+          <span class="topic-icon">❤️</span> Blood Pressure
+        </button>
+        <button class="topic-btn" onclick="insertPrompt('How much sleep do adults need each night?')">
+          <span class="topic-icon">😴</span> Sleep Health
+        </button>
+        <button class="topic-btn" onclick="insertPrompt('What are signs of a stroke? What is FAST?')">
+          <span class="topic-icon">🧠</span> Stroke Signs
+        </button>
+        <button class="topic-btn" onclick="insertPrompt('What vitamins and supplements are most important?')">
+          <span class="topic-icon">💊</span> Supplements
+        </button>
+      </nav>
+
+      <div class="sidebar-footer">
+        <div class="disclaimer-badge">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/>
+          </svg>
+          For information only. Not a substitute for professional medical advice.
+        </div>
+      </div>
+    </aside>
+
+    <!-- Main chat panel -->
+    <main class="chat-panel">
+
+      <!-- Header -->
+      <header class="chat-header">
+        <div class="header-left">
+          <div class="status-dot"></div>
+          <div>
+            <div class="header-title">Medical AI Assistant</div>
+            <div class="header-sub">Online · Responds instantly</div>
+          </div>
+        </div>
+        <div class="header-actions">
+          <button class="icon-btn" title="Clear chat" onclick="clearChat()">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-3.51"/>
+            </svg>
+          </button>
+        </div>
+      </header>
+
+      <!-- Messages -->
+      <div class="messages-area" id="messagesArea">
+
+        <!-- Welcome state -->
+        <div class="welcome-state" id="welcomeState">
+          <div class="welcome-pulse">
+            <div class="pulse-ring"></div>
+            <div class="pulse-core">
+              <svg width="32" height="32" viewBox="0 0 24 24" fill="none">
+                <path d="M19 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2zm-7 14l-5-5 1.41-1.41L12 14.17l7.59-7.59L21 8l-9 9z" fill="currentColor"/>
+              </svg>
+            </div>
+          </div>
+          <h2 class="welcome-title">How can I help you today?</h2>
+          <p class="welcome-sub">Ask me about symptoms, medications, wellness, or general health questions. I'm here to provide information and guidance.</p>
+
+          <div class="suggestion-chips">
+            <button class="chip" onclick="insertPrompt('I have a headache and mild fever, what could it be?')">Headache &amp; fever symptoms</button>
+            <button class="chip" onclick="insertPrompt('What foods help boost the immune system?')">Immune-boosting foods</button>
+            <button class="chip" onclick="insertPrompt('How do I manage stress and anxiety naturally?')">Managing anxiety</button>
+            <button class="chip" onclick="insertPrompt('What are the warning signs of diabetes?')">Diabetes warning signs</button>
+          </div>
+        </div>
+
+        <!-- Messages will appear here -->
+        <div id="messagesList"></div>
+
+      </div>
+
+      <!-- Input area -->
+      <div class="input-area">
+        <div class="input-wrap">
+          <textarea
+            id="userInput"
+            class="chat-input"
+            placeholder="Describe your symptoms or ask a health question…"
+            rows="1"
+            onkeydown="handleKey(event)"
+            oninput="autoResize(this)"
+          ></textarea>
+          <button class="send-btn" id="sendBtn" onclick="sendMessage()">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+              <line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>
+            </svg>
+          </button>
+        </div>
+        <p class="input-disclaimer">MediAssist provides general health information only. Always consult a licensed physician for medical decisions.</p>
+      </div>
+
+    </main>
+  </div>
+
+  <script>
+    const knowledgeBase = {
+      greet: {
+        triggers: ['hello','hi','hey','good morning','good afternoon','good evening','howdy'],
+        responses: ["Hello! I'm MediAssist, your AI health companion. How can I assist you today? Feel free to describe your symptoms or ask any health-related question.", "Hi there! I'm here to help with health information and general medical guidance. What's on your mind?"]
+      },
+      symptoms: {
+        triggers: ['symptom','feel','feeling','pain','ache','hurt','sore','discomfort'],
+        responses: ["I understand you're experiencing some discomfort. To give you better information, could you tell me: <br><br>• <b>Where</b> exactly is the pain/discomfort located?<br>• <b>How long</b> have you been experiencing this?<br>• <b>How severe</b> is it on a scale of 1–10?<br>• Any <b>other symptoms</b> accompanying it?<br><br>This will help me provide more relevant information."]
+      },
+      fever: {
+        triggers: ['fever','temperature','hot','chills','sweating','feverish'],
+        responses: ["<b>Fever Guide:</b><br><br>🌡️ <b>Normal:</b> 97–99°F (36.1–37.2°C)<br>🟡 <b>Low-grade:</b> 99–100.4°F — rest, hydrate<br>🟠 <b>Moderate:</b> 100.4–103°F — monitor closely, take acetaminophen/ibuprofen<br>🔴 <b>High:</b> Above 103°F — seek medical care<br><br><b>When to go to ER immediately:</b><br>• Fever in infant under 3 months<br>• Fever with stiff neck, rash, confusion<br>• Fever lasting more than 3 days<br><br>Stay hydrated and rest. Would you like more specific advice?"]
+      },
+      headache: {
+        triggers: ['headache','migraine','head pain','head hurts','throbbing head'],
+        responses: ["<b>Headache Types & Management:</b><br><br>🔵 <b>Tension headache</b> — dull pressure, both sides. Try: OTC pain relievers, rest, cold/warm compress<br>🟣 <b>Migraine</b> — throbbing, often one side, nausea/light sensitivity. Try: dark quiet room, triptans if prescribed<br>🟠 <b>Cluster headache</b> — severe, around one eye<br><br><b>⚠️ Seek immediate care if:</b><br>• Sudden, severe 'thunderclap' headache<br>• Headache with fever + stiff neck<br>• Headache after head injury<br>• Vision changes or confusion<br><br>What type of headache are you experiencing?"]
+      },
+      cold: {
+        triggers: ['cold','cough','runny nose','congestion','sore throat','sneezing'],
+        responses: ["<b>Common Cold vs. Flu:</b><br><br><table style='width:100%;border-collapse:collapse;font-size:13px'><tr style='background:rgba(20,184,166,0.15)'><th style='padding:6px;text-align:left'>Symptom</th><th style='padding:6px'>Cold</th><th style='padding:6px'>Flu</th></tr><tr><td style='padding:6px'>Onset</td><td style='padding:6px;text-align:center'>Gradual</td><td style='padding:6px;text-align:center'>Sudden</td></tr><tr><td style='padding:6px'>Fever</td><td style='padding:6px;text-align:center'>Rare</td><td style='padding:6px;text-align:center'>Common</td></tr><tr><td style='padding:6px'>Body aches</td><td style='padding:6px;text-align:center'>Mild</td><td style='padding:6px;text-align:center'>Severe</td></tr><tr><td style='padding:6px'>Fatigue</td><td style='padding:6px;text-align:center'>Mild</td><td style='padding:6px;text-align:center'>Extreme</td></tr></table><br><b>Home treatment:</b> Rest, fluids, honey-lemon tea, humidifier, OTC decongestants. Most resolve in 7–10 days."]
+      },
+      bp: {
+        triggers: ['blood pressure','hypertension','bp','systolic','diastolic'],
+        responses: ["<b>Blood Pressure Ranges:</b><br><br>💚 <b>Normal:</b> Less than 120/80 mmHg<br>🟡 <b>Elevated:</b> 120–129 / less than 80<br>🟠 <b>High Stage 1:</b> 130–139 / 80–89<br>🔴 <b>High Stage 2:</b> 140+ / 90+<br>🚨 <b>Crisis:</b> 180+ / 120+ → <b>Call 911 immediately</b><br><br><b>Lifestyle tips to lower BP:</b><br>• Reduce sodium (aim for under 2,300mg/day)<br>• Exercise 30 min most days<br>• Limit alcohol<br>• Quit smoking<br>• Manage stress (meditation, yoga)<br>• DASH diet<br><br>Are you monitoring your blood pressure?"]
+      },
+      diabetes: {
+        triggers: ['diabetes','blood sugar','glucose','insulin','diabetic'],
+        responses: ["<b>Diabetes Warning Signs:</b><br><br>🔴 <b>Type 1 & 2 common symptoms:</b><br>• Frequent urination<br>• Excessive thirst<br>• Unexplained weight loss<br>• Fatigue & weakness<br>• Blurred vision<br>• Slow-healing wounds<br>• Numbness/tingling in hands/feet<br><br><b>Blood Sugar Reference:</b><br>• Fasting normal: 70–99 mg/dL<br>• Pre-diabetes: 100–125 mg/dL<br>• Diabetes: 126+ mg/dL<br><br>If you're experiencing these symptoms, please schedule an appointment with your doctor for an HbA1c test. Early detection is key!"]
+      },
+      sleep: {
+        triggers: ['sleep','insomnia','tired','fatigue','rest','exhausted','drowsy'],
+        responses: ["<b>Sleep Recommendations by Age:</b><br><br>👶 Infants: 14–17 hrs<br>🧒 School-age: 9–11 hrs<br>🧑 Teens: 8–10 hrs<br>🧑‍💼 Adults: <b>7–9 hrs</b><br>👴 Seniors: 7–8 hrs<br><br><b>Sleep Hygiene Tips:</b><br>• Consistent sleep/wake schedule — even weekends<br>• No screens 1 hour before bed<br>• Keep bedroom cool (65–68°F / 18–20°C)<br>• Avoid caffeine after 2 PM<br>• Try the 4-7-8 breathing technique<br>• Limit alcohol (disrupts REM sleep)<br><br>Chronic insomnia lasting over 3 months warrants a doctor visit."]
+      },
+      stroke: {
+        triggers: ['stroke','fast','facial droop','arm weakness','speech difficulty'],
+        responses: ["🚨 <b>STROKE — Remember FAST:</b><br><br><div style='background:rgba(239,68,68,0.1);border-left:3px solid #ef4444;padding:12px;border-radius:4px;margin:8px 0'><b>F</b> — Face drooping (smile test)<br><b>A</b> — Arm weakness (raise both arms)<br><b>S</b> — Speech difficulty (slurring, confusion)<br><b>T</b> — Time to call <b>911 immediately</b></div><br>⏱️ <b>Every minute counts.</b> Stroke treatment is most effective within 3–4.5 hours of symptom onset.<br><br>Other signs: sudden severe headache, vision loss, numbness on one side, loss of balance.<br><br>If you suspect a stroke — <b>call emergency services now.</b>"]
+      },
+      supplements: {
+        triggers: ['vitamin','supplement','mineral','nutrient','deficiency'],
+        responses: ["<b>Essential Vitamins & Supplements:</b><br><br>☀️ <b>Vitamin D</b> — Bone health, immunity, mood. Most people are deficient. 1,000–2,000 IU/day<br>🐟 <b>Omega-3 (Fish Oil)</b> — Heart, brain, inflammation. 1–2g/day<br>🧬 <b>Magnesium</b> — Sleep, muscle, stress. 300–400mg/day<br>🦠 <b>Probiotics</b> — Gut health, immunity<br>🌿 <b>B12</b> — Energy, nerve function (especially for vegans)<br>⚡ <b>Iron</b> — Only if deficient (get tested first)<br><br><b>⚠️ Important:</b> Always consult your doctor before starting supplements, especially if you take medications. Some interact with prescriptions."]
+      },
+      mental: {
+        triggers: ['stress','anxiety','depression','mental','mood','sad','worried','panic'],
+        responses: ["<b>Mental Health — You're Not Alone:</b><br><br>First, thank you for bringing this up — mental health is as important as physical health.<br><br><b>Evidence-based coping strategies:</b><br>• 🧘 <b>Mindfulness & meditation</b> — even 10 min/day helps<br>• 🏃 <b>Exercise</b> — releases endorphins, reduces cortisol<br>• 😴 <b>Quality sleep</b> — crucial for mood regulation<br>• 🤝 <b>Social connection</b> — don't isolate<br>• 📔 <b>Journaling</b> — process thoughts and emotions<br>• 🌿 <b>Limit caffeine & alcohol</b><br><br><b>When to seek professional help:</b><br>If symptoms persist 2+ weeks, affect daily function, or include thoughts of self-harm — please reach out to a mental health professional or call a crisis line."]
+      },
+      emergency: {
+        triggers: ['emergency','911','urgent','serious','critical','dying'],
+        responses: ["🚨 <b>This sounds like an emergency.</b><br><br>Please <b>call 911</b> or your local emergency number immediately, or have someone take you to the nearest emergency room.<br><br>Do not delay seeking emergency care based on information from an AI assistant. Your safety is the priority.<br><br>If you are in immediate danger, please contact emergency services now."]
+      }
+    };
+
+    const fallbackResponses = [
+      "That's a great health question. Based on general medical knowledge, I'd recommend consulting with your primary care physician for personalized advice. Could you share more details about what you're experiencing so I can provide more relevant information?",
+      "Thank you for your question. While I can offer general health information, this topic may benefit from a professional evaluation. Can you tell me more about the duration and severity of what you're experiencing?",
+      "I want to make sure I give you accurate information. Could you provide a bit more context? For example, how long have you had this concern, and are there any accompanying symptoms?",
+      "General wellness advice: Stay hydrated (8 glasses/day), get 7–9 hours of sleep, exercise regularly, maintain a balanced diet rich in vegetables and lean protein, and schedule regular check-ups with your doctor. For your specific question, I'd recommend speaking with a healthcare provider."
+    ];
+
+    let messageCount = 0;
+    let fallbackIndex = 0;
+
+    function getResponse(input) {
+      const lower = input.toLowerCase();
+      for (const [key, data] of Object.entries(knowledgeBase)) {
+        if (data.triggers.some(t => lower.includes(t))) {
+          const r = data.responses;
+          return r[Math.floor(Math.random() * r.length)];
+        }
+      }
+      const resp = fallbackResponses[fallbackIndex % fallbackResponses.length];
+      fallbackIndex++;
+      return resp;
+    }
+
+    function createMessageEl(content, role, isHTML = false) {
+      const wrap = document.createElement('div');
+      wrap.className = `message-wrap ${role}`;
+
+      if (role === 'assistant') {
+        const avatar = document.createElement('div');
+        avatar.className = 'avatar';
+        avatar.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 15v-4H7l5-8v4h4l-5 8z"/></svg>`;
+        wrap.appendChild(avatar);
+      }
+
+      const bubble = document.createElement('div');
+      bubble.className = 'bubble';
+      if (isHTML) bubble.innerHTML = content;
+      else bubble.textContent = content;
+
+      const time = document.createElement('div');
+      time.className = 'msg-time';
+      time.textContent = new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+
+      wrap.appendChild(bubble);
+      wrap.appendChild(time);
+      return wrap;
+    }
+
+    function addTypingIndicator() {
+      const wrap = document.createElement('div');
+      wrap.className = 'message-wrap assistant';
+      wrap.id = 'typingIndicator';
+
+      const avatar = document.createElement('div');
+      avatar.className = 'avatar';
+      avatar.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 15v-4H7l5-8v4h4l-5 8z"/></svg>`;
+      wrap.appendChild(avatar);
+
+      const bubble = document.createElement('div');
+      bubble.className = 'bubble typing-bubble';
+      bubble.innerHTML = `<span class="dot"></span><span class="dot"></span><span class="dot"></span>`;
+      wrap.appendChild(bubble);
+      return wrap;
+    }
+
+    async function sendMessage() {
+      const input = document.getElementById('userInput');
+      const text = input.value.trim();
+      if (!text) return;
+
+      // Hide welcome state
+      document.getElementById('welcomeState').style.display = 'none';
+
+      const list = document.getElementById('messagesList');
+
+      // Add user message
+      const userEl = createMessageEl(text, 'user');
+      list.appendChild(userEl);
+      requestAnimationFrame(() => userEl.classList.add('visible'));
+
+      input.value = '';
+      autoResize(input);
+      messageCount++;
+
+      scrollToBottom();
+
+      // Disable send
+      document.getElementById('sendBtn').disabled = true;
+
+      // Typing indicator
+      const typing = addTypingIndicator();
+      list.appendChild(typing);
+      scrollToBottom();
+
+      // Simulate thinking delay
+      const delay = 800 + Math.random() * 900;
+      await new Promise(r => setTimeout(r, delay));
+
+      // Remove typing
+      typing.remove();
+
+      // Get and add response
+      const response = getResponse(text);
+      const botEl = createMessageEl(response, 'assistant', true);
+      list.appendChild(botEl);
+      requestAnimationFrame(() => botEl.classList.add('visible'));
+
+      document.getElementById('sendBtn').disabled = false;
+      scrollToBottom();
+    }
+
+    function handleKey(e) {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        sendMessage();
+      }
+    }
+
+    function autoResize(el) {
+      el.style.height = 'auto';
+      el.style.height = Math.min(el.scrollHeight, 140) + 'px';
+    }
+
+    function scrollToBottom() {
+      const area = document.getElementById('messagesArea');
+      area.scrollTop = area.scrollHeight;
+    }
+
+    function insertPrompt(text) {
+      const input = document.getElementById('userInput');
+      input.value = text;
+      autoResize(input);
+      input.focus();
+    }
+
+    function clearChat() {
+      document.getElementById('messagesList').innerHTML = '';
+      document.getElementById('welcomeState').style.display = 'flex';
+      document.getElementById('userInput').value = '';
+      messageCount = 0;
+    }
+  </script>
+</body>
+</html>
