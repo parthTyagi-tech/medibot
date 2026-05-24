@@ -1,26 +1,24 @@
 from langchain_core.prompts import ChatPromptTemplate
 
 
-system_prompt = (
-    "You are an assistant for question-answering tasks. "
-    "Use the following pieces of retrieved context to answer "
-    "the question. "
-    "If you don't know the answer, say that you don't know. "
-    "Use three sentences maximum and keep the answer concise."
-    "\n\n"
-    "{context}"
-)
+system_prompt = """
+You are a helpful medical chatbot.
+
+Rules:
+- Answer using retrieved medical context ONLY when it is relevant.
+- If the user asks a normal conversation question, respond naturally.
+- Do not force every question into a medical answer.
+- If context does not contain the answer, say you don't know.
+- Keep responses concise (max 3 sentences).
+
+Context:
+{context}
+"""
 
 
 prompt = ChatPromptTemplate.from_messages(
     [
-        (
-            "system",
-            system_prompt
-        ),
-        (
-            "human",
-            "{input}"
-        )
+        ("system", system_prompt),
+        ("human", "{input}")
     ]
 )
