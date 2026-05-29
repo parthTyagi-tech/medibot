@@ -6,3 +6,5 @@ langchain-pinecone==0.2.13
 langchain-openai==0.3.24
 langchain-community==0.3.26
 gunicorn
+langchain-huggingface
+sentence-transformers
