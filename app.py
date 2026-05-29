@@ -4,7 +4,7 @@ from research.src.helper import download_embeddings
 from research.src.prompt import prompt
 
 from langchain_pinecone import PineconeVectorStore
-from langchain_openai import ChatOpenAI
+from langchain_groq import ChatGroq
 from langchain.chains import create_retrieval_chain
 from langchain.chains.combine_documents import create_stuff_documents_chain
 
@@ -20,10 +20,10 @@ app = Flask(__name__)
 load_dotenv()
 
 PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 os.environ["PINECONE_API_KEY"] = PINECONE_API_KEY
-os.environ["OPENAI_API_KEY"] = OPENAI_API_KEY
+os.environ["GROQ_API_KEY"] = GROQ_API_KEY
 
 
 # ==========================
@@ -47,9 +47,10 @@ retriever = docsearch.as_retriever(
 # ==========================
 # LLM
 # ==========================
-chatModel = ChatOpenAI(
-    model="gpt-4o",
-    temperature=0.7
+chatModel = ChatGroq(
+    model="llama-3.3-70b-versatile",
+    groq_api_key=os.getenv("GROQ_API_KEY"),
+    temperature=0.3
 )
 
 
