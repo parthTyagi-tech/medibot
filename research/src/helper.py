@@ -1,16 +1,16 @@
 from typing import List
-from langchain.schema import Document
+from langchain_core.documents import Document
 from langchain_community.document_loaders import DirectoryLoader, PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_huggingface import HuggingFaceEmbeddings
 
 
+# Embeddings
 def download_embeddings():
     return HuggingFaceEmbeddings(
         model_name="sentence-transformers/all-MiniLM-L6-v2"
     )
-
-
+# Extract PDFs
 def load_pdf_files(data):
     loader = DirectoryLoader(
         path=data,
@@ -20,6 +20,7 @@ def load_pdf_files(data):
     return loader.load()
 
 
+# Reduce metadata
 def filter_to_minimal_docs(docs: List[Document]):
     minimal_docs = []
 
@@ -39,6 +40,7 @@ def filter_to_minimal_docs(docs: List[Document]):
     return minimal_docs
 
 
+# Split documents
 def text_split(
     docs,
     chunk_size=2500,

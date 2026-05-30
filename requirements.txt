@@ -1,15 +1,14 @@
 flask==3.1.1
 gunicorn
-
 python-dotenv==1.1.0
 pypdf==5.6.1
 
 langchain==0.3.26
 langchain-community==0.3.26
-langchain-openai==0.3.24
+langchain-core==0.3.68
+langchain-groq==0.3.2
 langchain-pinecone==0.2.13
 
-langchain-groq==0.3.2
-
-langchain-huggingface==0.1.2
-sentence-transformers==4.1.0
+langchain-huggingface
+sentence-transformers
+pinecone

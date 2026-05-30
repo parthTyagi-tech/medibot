@@ -22,6 +22,8 @@ load_dotenv()
 PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
+
+
 os.environ["PINECONE_API_KEY"] = PINECONE_API_KEY
 os.environ["GROQ_API_KEY"] = GROQ_API_KEY
 
@@ -49,10 +51,9 @@ retriever = docsearch.as_retriever(
 # ==========================
 chatModel = ChatGroq(
     model="llama-3.3-70b-versatile",
-    groq_api_key=os.getenv("GROQ_API_KEY"),
+    groq_api_key=GROQ_API_KEY,
     temperature=0.3
 )
-
 
 # ==========================
 # RAG Chain
@@ -100,7 +101,7 @@ def is_medical_query(text):
     return any(
         word in text
         for word in medical_keywords
-    )
+    )# where we are finding the rest words 
 
 
 # ==========================
