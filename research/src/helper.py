@@ -1,16 +1,34 @@
 from typing import List
-from langchain_core.documents import Document
+from langchain.schema import Document
 from langchain_community.document_loaders import DirectoryLoader, PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_huggingface import HuggingFaceEmbeddings
+from sentence_transformers import SentenceTransformer
 
 
-# Embeddings
+class LocalEmbeddings:
+
+    def __init__(self):
+        self.model = SentenceTransformer(
+            "sentence-transformers/all-MiniLM-L6-v2"
+        )
+
+    def embed_documents(self, texts):
+        return self.model.encode(
+            texts,
+            convert_to_numpy=True
+        ).tolist()
+
+    def embed_query(self, text):
+        return self.model.encode(
+            text,
+            convert_to_numpy=True
+        ).tolist()
+
+
 def download_embeddings():
-    return HuggingFaceEmbeddings(
-        model_name="sentence-transformers/all-MiniLM-L6-v2"
-    )
-# Extract PDFs
+    return LocalEmbeddings()
+
+
 def load_pdf_files(data):
     loader = DirectoryLoader(
         path=data,
@@ -20,7 +38,6 @@ def load_pdf_files(data):
     return loader.load()
 
 
-# Reduce metadata
 def filter_to_minimal_docs(docs: List[Document]):
     minimal_docs = []
 
@@ -40,7 +57,6 @@ def filter_to_minimal_docs(docs: List[Document]):
     return minimal_docs
 
 
-# Split documents
 def text_split(
     docs,
     chunk_size=2500,
@@ -52,7 +68,3 @@ def text_split(
     )
 
     return splitter.split_documents(docs)
-
-
-if __name__ == "__main__":
-    print("helper.py loaded successfully")

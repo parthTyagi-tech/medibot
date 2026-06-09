@@ -1,322 +1,806 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>MediAssist — AI Health Companion</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
-  <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,300&display=swap" rel="stylesheet"/>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MediAssist — AI Health Companion</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+    <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=Source+Sans+Pro:wght@400;600;700&display=swap" rel="stylesheet" />
+    <!-- LiveKit SDK -->
+    <script src="https://cdn.jsdelivr.net/npm/livekit-client@2.11.4/dist/livekit-client.umd.min.js"></script>
 </head>
+
 <body>
 
-  <!-- Ambient background -->
-  <div class="ambient-bg">
-    <div class="orb orb-1"></div>
-    <div class="orb orb-2"></div>
-    <div class="orb orb-3"></div>
-  </div>
+    <style>
+      #loader {
+        position: fixed; inset: 0; z-index: 9999;
+        background: radial-gradient(circle at 50% 50%, #1a1a1a 0%, #050505 100%);
+        display: flex; flex-direction: column; align-items: center; justify-content: center;
+        gap: 28px; transition: opacity 0.7s ease, visibility 0.7s ease;
+        font-family: 'Source Sans Pro', sans-serif;
+      }
+      #loader.hidden { opacity: 0; visibility: hidden; pointer-events: none; }
+      #loader .loader-orb { width: 88px; height: 88px; position: relative; transform-style: preserve-3d; animation: loaderSpin 2.2s linear infinite; }
+      #loader .loader-ring { position: absolute; inset: 0; border-radius: 50%; border: 2px solid transparent; border-top-color: #ff4d4d; border-right-color: rgba(255,77,77,0.4); }
+      #loader .loader-ring:nth-child(2) { transform: rotateX(70deg); border-top-color: #fff; }
+      #loader .loader-ring:nth-child(3) { transform: rotateY(70deg); border-top-color: #ff8a8a; }
+      @keyframes loaderSpin { 0% { transform: rotateX(0) rotateY(0); } 100% { transform: rotateX(360deg) rotateY(360deg); } }
+      #loader .loader-text { font-family: 'DM Serif Display', Georgia, serif; color: #fff; font-size: 22px; letter-spacing: 2px; }
+      #loader .loader-text span { color: #ff4d4d; font-style: italic; }
+      #loader .loader-sub { color: #888; font-size: 11px; letter-spacing: 0.3em; text-transform: uppercase; }
+      #loader .loader-bar { width: 220px; height: 2px; background: rgba(255,255,255,0.08); border-radius: 2px; overflow: hidden; }
+      #loader .loader-bar::after { content: ''; display: block; height: 100%; width: 40%; background: linear-gradient(90deg, transparent, #ff4d4d, transparent); animation: loadSlide 1.4s ease-in-out infinite; }
+      @keyframes loadSlide { 0% { transform: translateX(-100%); } 100% { transform: translateX(350%); } }
 
-  <div class="app-shell">
+      #bg-canvas { position: fixed; inset: 0; z-index: 0; pointer-events: none; }
+      .app-shell, .ambient-bg { position: relative; z-index: 1; }
+      #themeToggle svg { transition: transform 0.5s ease; }
+      #themeToggle:hover svg { transform: rotate(180deg); }
 
-    <!-- Sidebar -->
-    <aside class="sidebar">
-      <div class="sidebar-logo">
-        <div class="logo-icon">
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
-            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 15v-4H7l5-8v4h4l-5 8z" fill="currentColor"/>
-          </svg>
-        </div>
-        <span class="logo-text">MediAssist</span>
+      #micBtn { transition: all 0.2s ease; position: relative; }
+      #micBtn.voice-connecting { opacity: 0.6; cursor: wait; }
+      #micBtn.voice-active {
+        background: rgba(220, 38, 38, 0.15) !important;
+        color: #dc2626 !important;
+        animation: micPulse 1.5s ease-in-out infinite;
+      }
+      @keyframes micPulse {
+        0%, 100% { box-shadow: 0 0 0 0 rgba(220,38,38,0.4); }
+        50%       { box-shadow: 0 0 0 8px rgba(220,38,38,0); }
+      }
+      .voice-label { font-size: 10px; opacity: 0.55; margin-bottom: 3px; display: block; }
+      #voiceToast {
+        position: fixed; bottom: 90px; left: 50%; transform: translateX(-50%);
+        background: rgba(15,23,42,0.92); color: #fff; padding: 8px 18px;
+        border-radius: 20px; font-size: 13px; font-family: 'Source Sans Pro', sans-serif;
+        z-index: 9000; pointer-events: none; opacity: 0; transition: opacity 0.3s ease; white-space: nowrap;
+      }
+      #voiceToast.show { opacity: 1; }
+    </style>
+
+    <div id="voiceToast">🎙️ Connecting…</div>
+
+    <div id="loader">
+      <div class="loader-orb">
+        <div class="loader-ring"></div>
+        <div class="loader-ring"></div>
+        <div class="loader-ring"></div>
       </div>
+      <div class="loader-text">Medi<span>Assist</span></div>
+      <div class="loader-bar"></div>
+      <div class="loader-sub">Connecting to AI Companion</div>
+    </div>
 
-      <button class="new-chat-btn" onclick="clearChat()">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
-        </svg>
-        New Consultation
-      </button>
+    <canvas id="bg-canvas"></canvas>
 
-      <div class="sidebar-section-label">Quick Topics</div>
-      <nav class="quick-topics">
-        <button class="topic-btn" onclick="insertPrompt('What are common symptoms of flu vs cold?')">
-          <span class="topic-icon">🤧</span> Flu vs Cold
-        </button>
-        <button class="topic-btn" onclick="insertPrompt('What should I do if I have a fever above 103°F?')">
-          <span class="topic-icon">🌡️</span> High Fever
-        </button>
-        <button class="topic-btn" onclick="insertPrompt('What are healthy blood pressure ranges?')">
-          <span class="topic-icon">❤️</span> Blood Pressure
-        </button>
-        <button class="topic-btn" onclick="insertPrompt('How much sleep do adults need each night?')">
-          <span class="topic-icon">😴</span> Sleep Health
-        </button>
-        <button class="topic-btn" onclick="insertPrompt('What are signs of a stroke? What is FAST?')">
-          <span class="topic-icon">🧠</span> Stroke Signs
-        </button>
-        <button class="topic-btn" onclick="insertPrompt('What vitamins and supplements are most important?')">
-          <span class="topic-icon">💊</span> Supplements
-        </button>
-      </nav>
+    <div class="ambient-bg">
+        <div class="orb orb-1"></div>
+        <div class="orb orb-2"></div>
+        <div class="orb orb-3"></div>
+    </div>
 
-      <div class="sidebar-footer">
-        <div class="disclaimer-badge">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor">
-            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/>
-          </svg>
-          For information only. Not a substitute for professional medical advice.
-        </div>
-      </div>
-    </aside>
+    <div class="app-shell">
 
-    <!-- Main chat panel -->
-    <main class="chat-panel">
-
-      <!-- Header -->
-      <header class="chat-header">
-        <div class="header-left">
-          <div class="status-dot"></div>
-          <div>
-            <div class="header-title">Medical AI Assistant</div>
-            <div class="header-sub">Online · Responds instantly</div>
-          </div>
-        </div>
-        <div class="header-actions">
-          <button class="icon-btn" title="Clear chat" onclick="clearChat()">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-3.51"/>
-            </svg>
-          </button>
-        </div>
-      </header>
-
-      <!-- Messages -->
-      <div class="messages-area" id="messagesArea">
-
-        <!-- Welcome state -->
-        <div class="welcome-state" id="welcomeState">
-          <div class="welcome-pulse">
-            <div class="pulse-ring"></div>
-            <div class="pulse-core">
-              <svg width="32" height="32" viewBox="0 0 24 24" fill="none">
-                <path d="M19 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2zm-7 14l-5-5 1.41-1.41L12 14.17l7.59-7.59L21 8l-9 9z" fill="currentColor"/>
-              </svg>
+        <aside class="sidebar">
+            <div class="sidebar-logo">
+                <div class="logo-icon">
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+                        <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 15v-4H7l5-8v4h4l-5 8z" fill="currentColor" />
+                    </svg>
+                </div>
+                <span class="logo-text">MediAssist</span>
             </div>
-          </div>
-          <h2 class="welcome-title">How can I help you today?</h2>
-          <p class="welcome-sub">Ask me about symptoms, medications, wellness, or general health questions. I'm here to provide information and guidance.</p>
 
-          <div class="suggestion-chips">
-            <button class="chip" onclick="insertPrompt('I have a headache and mild fever, what could it be?')">Headache &amp; fever symptoms</button>
-            <button class="chip" onclick="insertPrompt('What foods help boost the immune system?')">Immune-boosting foods</button>
-            <button class="chip" onclick="insertPrompt('How do I manage stress and anxiety naturally?')">Managing anxiety</button>
-            <button class="chip" onclick="insertPrompt('What are the warning signs of diabetes?')">Diabetes warning signs</button>
-          </div>
-        </div>
+            <button onclick="newChat()">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <line x1="12" y1="5" x2="12" y2="19" />
+                    <line x1="5" y1="12" x2="19" y2="12" />
+                </svg>
+                New Chat
+            </button>
 
-        <!-- Messages will appear here -->
-        <div id="messagesList"></div>
+            <div class="sidebar-section-label">Recent Consultations</div>
 
-      </div>
+            <nav class="chat-history">
+                {% for session in past_sessions %}
+                <div class="history-row">
+                    <button class="history-btn" data-session="{{ session.id }}" onclick="loadSession({{ session.id }})">
+                        {{ session.title }}
+                    </button>
+                    <button class="menu-btn" onclick="toggleMenu(event, {{ session.id }})">⋮</button>
+                    <div class="history-menu" id="menu-{{ session.id }}">
+                        <button onclick="event.stopPropagation(); deleteSession({{ session.id }})">Delete Chat</button>
+                    </div>
+                </div>
+                {% endfor %}
+            </nav>
 
-      <!-- Input area -->
-      <div class="input-area">
-        <div class="input-wrap">
-          <textarea
-            id="userInput"
-            class="chat-input"
-            placeholder="Describe your symptoms or ask a health question…"
-            rows="1"
-            onkeydown="handleKey(event)"
-            oninput="autoResize(this)"
-          ></textarea>
-          <button class="send-btn" id="sendBtn" onclick="sendMessage()">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-              <line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>
-            </svg>
-          </button>
-        </div>
-        <p class="input-disclaimer">MediAssist provides general health information only. Always consult a licensed physician for medical decisions.</p>
-      </div>
+            <div class="sidebar-footer">
+                <div class="disclaimer-badge">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z" />
+                    </svg>
+                    For information only. Not a substitute for professional medical advice.
+                </div>
+            </div>
+        </aside>
 
-    </main>
-  </div>
+        <main class="chat-panel">
+            <header class="chat-header">
+                <div class="header-left">
+                    <div class="status-dot"></div>
+                    <div>
+                        <div class="header-title">Medical AI Assistant</div>
+                        <div class="header-sub">Online · Responds instantly</div>
+                    </div>
+                </div>
+                <div class="header-actions">
+                    <button class="btn-icon" id="micBtn" onclick="toggleVoice()" title="Start / Stop voice chat">🎤</button>
+                    <button class="btn-icon" title="Toggle theme" onclick="toggleTheme()" id="themeToggle">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+                        </svg>
+                    </button>
+                    <button class="btn-icon" title="Clear chat" onclick="clearChat()">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <polyline points="1 4 1 10 7 10" />
+                            <path d="M3.51 15a9 9 0 1 0 .49-3.51" />
+                        </svg>
+                    </button>
+                    <div class="user-info">
+                        {% if user.avatar %}
+                        <img src="{{ user.avatar }}" class="user-avatar" alt="{{ user.name }}" />
+                        {% else %}
+                        <div class="user-avatar-fallback">{{ user.name[0] | upper }}</div>
+                        {% endif %}
+                        <span class="user-name">{{ user.name }}</span>
+                        <a href="/logout" class="btn-glossy">Sign out</a>
+                    </div>
+                </div>
+            </header>
 
-  <script>
+            <div class="messages-area" id="messagesArea">
+                <div class="welcome-state" id="welcomeState">
+                    <div class="welcome-pulse">
+                        <div class="pulse-ring"></div>
+                        <div class="pulse-core">
+                            <svg width="32" height="32" viewBox="0 0 24 24" fill="none">
+                                <path d="M19 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2zm-7 14l-5-5 1.41-1.41L12 14.17l7.59-7.59L21 8l-9 9z" fill="currentColor" />
+                            </svg>
+                        </div>
+                    </div>
+                    <h2 class="welcome-title">How can I help you today?</h2>
+                    <p class="welcome-sub">Ask me about symptoms, medications, wellness, or general health questions. I'm here to provide information and guidance.</p>
+                    <div class="suggestion-chips">
+                        <button onclick="insertPrompt('I have a headache and mild fever, what could it be?')">Headache &amp; fever</button>
+                        <button onclick="insertPrompt('What foods help boost the immune system?')">Immune foods</button>
+                        <button onclick="insertPrompt('How do I manage stress and anxiety naturally?')">Anxiety help</button>
+                        <button onclick="insertPrompt('What are the warning signs of diabetes?')">Diabetes signs</button>
+                    </div>
+                </div>
+                <div id="messagesList"></div>
+            </div>
 
+            <div class="input-area">
+                <div class="input-wrap">
+                    <textarea
+                        id="userInput"
+                        class="chat-input"
+                        placeholder="Describe your symptoms or ask a health question…"
+                        rows="1"
+                        onkeydown="handleKey(event)"
+                        oninput="autoResize(this)"
+                    ></textarea>
+                    <button class="btn-icon" id="sendBtn" onclick="sendMessage()">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                            <line x1="22" y1="2" x2="11" y2="13" />
+                            <polygon points="22 2 15 22 11 13 2 9 22 2" />
+                        </svg>
+                    </button>
+                </div>
+                <p class="input-disclaimer">MediAssist provides general health information only. Always consult a licensed physician for medical decisions.</p>
+            </div>
+        </main>
 
-function createMessageEl(content, role, isHTML = false) {
-    const wrap = document.createElement('div');
-    wrap.className = `message-wrap ${role}`;
+    </div>
 
-    if (role === 'assistant') {
-        const avatar = document.createElement('div');
-        avatar.className = 'avatar';
-        avatar.innerHTML = `
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-                <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 15v-4H7l5-8v4h4l-5 8z"/>
-            </svg>
-        `;
-        wrap.appendChild(avatar);
-    }
+    <!-- Hidden audio container for LiveKit agent audio -->
+    <div id="audio-sink" style="display:none">
+        <audio id="remoteAudio" autoplay playsinline></audio>
+    </div>
 
-    const bubble = document.createElement('div');
-    bubble.className = 'bubble';
+    <script>
 
-    if (isHTML) {
-        bubble.innerHTML = content;
-    } else {
-        bubble.textContent = content;
-    }
+        // ── Chat history ──────────────────────────────────────
 
-    const time = document.createElement('div');
-    time.className = 'msg-time';
-    time.textContent = new Date().toLocaleTimeString([], {
-        hour: '2-digit',
-        minute: '2-digit'
-    });
+        async function newChat() {
+            await fetch("/new_chat", { method: "POST" });
+            location.reload();
+        }
 
-    wrap.appendChild(bubble);
-    wrap.appendChild(time);
+        async function loadSession(sessionId) {
+            document.querySelectorAll(".history-btn").forEach(btn => btn.classList.remove("active-history"));
+            const currentBtn = document.querySelector(`[data-session="${sessionId}"]`);
+            if (currentBtn) currentBtn.classList.add("active-history");
 
-    return wrap;
-}
+            const res  = await fetch(`/load_session/${sessionId}`);
+            const data = await res.json();
 
-function addTypingIndicator() {
-    const wrap = document.createElement('div');
-    wrap.className = 'message-wrap assistant';
-    wrap.id = 'typingIndicator';
+            document.getElementById("welcomeState").style.display = "none";
+            document.getElementById("messagesList").innerHTML = "";
 
-    const avatar = document.createElement('div');
-    avatar.className = 'avatar';
+            data.messages.forEach(m => {
+                const el = createMessageEl(m.content, m.role, m.role === "assistant");
+                document.getElementById("messagesList").appendChild(el);
+                el.classList.add("visible");
+            });
+            scrollToBottom();
+        }
 
-    avatar.innerHTML = `
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 15v-4H7l5-8v4h4l-5 8z"/>
-        </svg>
-    `;
+        function toggleMenu(event, sessionId) {
+            event.stopPropagation();
+            document.querySelectorAll(".history-menu").forEach(menu => { menu.style.display = "none"; });
+            const menu = document.getElementById(`menu-${sessionId}`);
+            menu.style.display = menu.style.display === "block" ? "none" : "block";
+        }
 
-    wrap.appendChild(avatar);
+        async function deleteSession(sessionId) {
+            if (!confirm("Delete this chat?")) return;
+            try {
+                const response = await fetch(`/delete_session/${sessionId}`, { method: "POST" });
+                const data = await response.json();
+                if (data.success) { location.reload(); }
+                else { alert("Failed to delete chat"); }
+            } catch (error) {
+                console.error(error);
+                alert("Error deleting chat");
+            }
+        }
 
-    const bubble = document.createElement('div');
-    bubble.className = 'bubble typing-bubble';
+        async function clearChat() {
+            await fetch("/new_chat", { method: "POST" });
+            document.getElementById("messagesList").innerHTML = "";
+            document.getElementById("welcomeState").style.display = "flex";
+            document.getElementById("userInput").value = "";
+        }
 
-    bubble.innerHTML = `
-        <span class="dot"></span>
-        <span class="dot"></span>
-        <span class="dot"></span>
-    `;
+        // ── Message rendering ─────────────────────────────────
 
-    wrap.appendChild(bubble);
+        function createMessageEl(content, role, isHTML = false, isVoice = false) {
+            const wrap = document.createElement("div");
+            wrap.className = `message-wrap ${role}`;
 
-    return wrap;
-}
+            if (role === "assistant") {
+                const avatar = document.createElement("div");
+                avatar.className = "avatar";
+                avatar.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 15v-4H7l5-8v4h4l-5 8z"/></svg>`;
+                wrap.appendChild(avatar);
+            }
 
-async function sendMessage() {
+            const bubble = document.createElement("div");
+            bubble.className = "bubble";
 
-    const input = document.getElementById('userInput');
-    const text = input.value.trim();
+            if (isVoice) {
+                const label = document.createElement("span");
+                label.className = "voice-label";
+                label.textContent = role === "user" ? "🎙️ Voice" : "🎙️ Voice reply";
+                bubble.appendChild(label);
+            }
 
-    if (!text) return;
+            const contentNode = document.createElement("div");
+            if (isHTML) { contentNode.innerHTML = content; }
+            else { contentNode.textContent = content; }
+            bubble.appendChild(contentNode);
 
-    document.getElementById('welcomeState').style.display = 'none';
+            const time = document.createElement("div");
+            time.className = "msg-time";
+            time.textContent = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
-    const list = document.getElementById('messagesList');
+            wrap.appendChild(bubble);
+            wrap.appendChild(time);
+            return wrap;
+        }
 
-    const userEl = createMessageEl(text, 'user');
-    list.appendChild(userEl);
+        function addTypingIndicator() {
+            const wrap = document.createElement("div");
+            wrap.className = "message-wrap assistant";
+            wrap.id = "typingIndicator";
 
-    requestAnimationFrame(() => {
-        userEl.classList.add('visible');
-    });
+            const avatar = document.createElement("div");
+            avatar.className = "avatar";
+            avatar.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 15v-4H7l5-8v4h4l-5 8z"/></svg>`;
+            wrap.appendChild(avatar);
 
-    input.value = '';
-    autoResize(input);
+            const bubble = document.createElement("div");
+            bubble.className = "bubble typing-bubble";
+            bubble.innerHTML = `<span class="dot"></span><span class="dot"></span><span class="dot"></span>`;
+            wrap.appendChild(bubble);
+            return wrap;
+        }
 
-    scrollToBottom();
+        // ── Text chat ─────────────────────────────────────────
 
-    document.getElementById('sendBtn').disabled = true;
+        async function sendMessage() {
+            const input = document.getElementById("userInput");
+            const text  = input.value.trim();
+            if (!text) return;
 
-    const typing = addTypingIndicator();
-    list.appendChild(typing);
+            document.getElementById("welcomeState").style.display = "none";
 
-    scrollToBottom();
+            const list   = document.getElementById("messagesList");
+            const userEl = createMessageEl(text, "user");
+            list.appendChild(userEl);
+            requestAnimationFrame(() => userEl.classList.add("visible"));
 
-    try {
+            input.value = "";
+            autoResize(input);
+            scrollToBottom();
 
-        const formData = new FormData();
-        formData.append("msg", text);
+            document.getElementById("sendBtn").disabled = true;
 
-        const response = await fetch("/get", {
-            method: "POST",
-            body: formData
+            const typing = addTypingIndicator();
+            list.appendChild(typing);
+            scrollToBottom();
+
+            try {
+                const formData = new FormData();
+                formData.append("msg", text);
+
+                const response = await fetch("/get", { method: "POST", body: formData });
+                const answer   = await response.text();
+
+                typing.remove();
+
+                const botEl = createMessageEl(answer, "assistant", true);
+                list.appendChild(botEl);
+                requestAnimationFrame(() => botEl.classList.add("visible"));
+            } catch (error) {
+                console.error(error);
+                typing.remove();
+                const botEl = createMessageEl("Server error. Please check Flask logs.", "assistant");
+                list.appendChild(botEl);
+            }
+
+            document.getElementById("sendBtn").disabled = false;
+            scrollToBottom();
+        }
+
+        function handleKey(event) {
+            if (event.key === "Enter" && !event.shiftKey) {
+                event.preventDefault();
+                sendMessage();
+            }
+        }
+
+        function autoResize(el) {
+            el.style.height = "auto";
+            el.style.height = Math.min(el.scrollHeight, 140) + "px";
+        }
+
+        function scrollToBottom() {
+            const area = document.getElementById("messagesArea");
+            area.scrollTop = area.scrollHeight;
+        }
+
+        function insertPrompt(text) {
+            const input = document.getElementById("userInput");
+            input.value = text;
+            autoResize(input);
+            input.focus();
+        }
+
+        // ── Theme ─────────────────────────────────────────────
+
+        function toggleTheme() {
+            const isDark = document.body.classList.toggle("dark");
+            localStorage.setItem("theme", isDark ? "dark" : "light");
+        }
+
+        (function () {
+            if (localStorage.getItem("theme") === "dark") {
+                document.body.classList.add("dark");
+            }
+        })();
+
+        // ── Voice chat via LiveKit ────────────────────────────
+
+        let livekitRoom = null;
+        let voiceActive = false;
+        let toastTimer  = null;
+        const seenTranscripts = new Set();
+
+        function attachRemoteAudio(track) {
+            if (!track || track.kind !== LivekitClient.Track.Kind.Audio) return;
+            const audioEl = document.getElementById("remoteAudio");
+            if (!audioEl) return;
+            try {
+                track.attach(audioEl);
+            } catch (e) {
+                console.warn("track.attach failed:", e);
+                return;
+            }
+            audioEl.muted = false;
+            audioEl.volume = 1.0;
+            const playPromise = audioEl.play();
+            if (playPromise && typeof playPromise.catch === "function") {
+                playPromise.catch((err) => console.warn("Audio play blocked:", err));
+            }
+        }
+
+        function attachExistingRemoteAudio(room) {
+            room.remoteParticipants.forEach((participant) => {
+                if (participant.isLocal) return;
+                participant.audioTrackPublications.forEach((pub) => {
+                    if (pub.track) attachRemoteAudio(pub.track);
+                });
+            });
+        }
+
+        function isAgentParticipant(participant) {
+            if (!participant || participant.isLocal) return false;
+            const attrs = participant.attributes || {};
+            if (attrs["lk.agent.state"]) return true;
+            const name = (participant.name || "").toLowerCase();
+            const id = (participant.identity || "").toLowerCase();
+            return (
+                name.includes("agent") ||
+                name.includes("mediassist") ||
+                id.includes("agent")
+            );
+        }
+
+        function findAgentParticipant(room) {
+            const localId = room.localParticipant?.identity;
+            for (const participant of room.remoteParticipants.values()) {
+                if (participant.identity === localId) continue;
+                if (isAgentParticipant(participant)) return participant;
+            }
+            for (const participant of room.remoteParticipants.values()) {
+                if (participant.identity !== localId) return participant;
+            }
+            return null;
+        }
+
+        function waitForAgentParticipant(room, timeoutMs = 45000) {
+            return new Promise((resolve, reject) => {
+                const existing = findAgentParticipant(room);
+                if (existing) {
+                    resolve(existing);
+                    return;
+                }
+
+                const timer = setTimeout(() => {
+                    cleanup();
+                    reject(new Error("Voice agent did not join in time"));
+                }, timeoutMs);
+
+                const onConnected = (participant) => {
+                    if (!participant || participant.isLocal) return;
+                    cleanup();
+                    resolve(participant);
+                };
+
+                const onTrackSubscribed = (track, _pub, participant) => {
+                    if (!participant || participant.isLocal) return;
+                    if (track.kind === LivekitClient.Track.Kind.Audio) {
+                        cleanup();
+                        resolve(participant);
+                    }
+                };
+
+                function cleanup() {
+                    clearTimeout(timer);
+                    room.off(LivekitClient.RoomEvent.ParticipantConnected, onConnected);
+                    room.off(LivekitClient.RoomEvent.TrackSubscribed, onTrackSubscribed);
+                }
+
+                room.on(LivekitClient.RoomEvent.ParticipantConnected, onConnected);
+                room.on(LivekitClient.RoomEvent.TrackSubscribed, onTrackSubscribed);
+            });
+        }
+
+        function registerLiveKitStreamHandlers(room) {
+            const drainStream = async (reader) => {
+                try {
+                    if (typeof reader.readAll === "function") {
+                        await reader.readAll();
+                        return;
+                    }
+                    for await (const _ of reader) { /* drain */ }
+                } catch (_) { /* stream closed */ }
+            };
+
+            room.registerByteStreamHandler("lk.agent.session", (reader) => {
+                void drainStream(reader);
+            });
+            room.registerTextStreamHandler("lk.transcription", (reader) => {
+                void drainStream(reader);
+            });
+        }
+
+        function parseTranscriptPayload(payload) {
+            const bytes = payload instanceof Uint8Array
+                ? payload
+                : new Uint8Array(payload);
+            return JSON.parse(new TextDecoder().decode(bytes));
+        }
+
+        function handleTranscriptMessage(json) {
+            if (!json || json.type !== "transcript" || !json.text) return;
+            const key = `${json.role}:${json.text}`;
+            if (seenTranscripts.has(key)) return;
+            seenTranscripts.add(key);
+            appendVoiceBubble(json.role, json.text);
+        }
+
+        function showToast(msg, durationMs = 3000) {
+            const toast = document.getElementById("voiceToast");
+            toast.textContent = msg;
+            toast.classList.add("show");
+            clearTimeout(toastTimer);
+            if (durationMs > 0) {
+                toastTimer = setTimeout(() => toast.classList.remove("show"), durationMs);
+            }
+        }
+
+        function hideToast() {
+            document.getElementById("voiceToast").classList.remove("show");
+        }
+
+        async function toggleVoice() {
+            if (!voiceActive) {
+                await startVoice();
+            } else {
+                await stopVoice();
+            }
+        }
+
+        async function startVoice() {
+            if (voiceActive) return;
+            const btn = document.getElementById("micBtn");
+            btn.classList.add("voice-connecting");
+            btn.disabled = true;
+            seenTranscripts.clear();
+            showToast("🎙️ Connecting to voice…", 0);
+
+            try {
+                const res  = await fetch("/livekit_token");
+                const data = await res.json();
+                if (!res.ok || !data.token) {
+                    throw new Error(data.error || "No token from server");
+                }
+
+                livekitRoom = new LivekitClient.Room({
+                    adaptiveStream: true,
+                    dynacast: true,
+                    audioCaptureDefaults: {
+                        autoGainControl: true,
+                        echoCancellation: true,
+                        noiseSuppression: true,
+                    },
+                });
+
+                registerLiveKitStreamHandlers(livekitRoom);
+
+                livekitRoom.on(
+                    LivekitClient.RoomEvent.DataReceived,
+                    (payload, participant, _kind, topic) => {
+                        if (participant && participant.isLocal) return;
+                        try {
+                            handleTranscriptMessage(parseTranscriptPayload(payload));
+                        } catch (e) {
+                            if (!topic || topic === "mediassist.transcript" || topic === "") {
+                                console.warn("Data parse error:", e);
+                            }
+                        }
+                    }
+                );
+
+                livekitRoom.on(LivekitClient.RoomEvent.TrackSubscribed, (track, _pub, participant) => {
+                    if (!participant || participant.isLocal) return;
+                    attachRemoteAudio(track);
+                });
+
+                livekitRoom.on(LivekitClient.RoomEvent.TrackPublished, (pub, participant) => {
+                    if (!participant || participant.isLocal) return;
+                    if (pub.track) attachRemoteAudio(pub.track);
+                });
+
+                livekitRoom.on(LivekitClient.RoomEvent.ParticipantConnected, (participant) => {
+                    if (!participant || participant.isLocal) return;
+                    attachExistingRemoteAudio(livekitRoom);
+                });
+
+                livekitRoom.on(LivekitClient.RoomEvent.TrackUnsubscribed, (track) => {
+                    if (track.kind === LivekitClient.Track.Kind.Audio) {
+                        const audioEl = document.getElementById("remoteAudio");
+                        if (audioEl) {
+                            try { track.detach(audioEl); } catch (_) {}
+                        }
+                    }
+                });
+
+                await livekitRoom.connect(data.url, data.token);
+                await livekitRoom.startAudio();
+                await livekitRoom.localParticipant.setMicrophoneEnabled(true);
+
+                showToast("🎙️ Starting MediAssist agent…", 0);
+
+                const dispatchRes = await fetch("/dispatch_agent", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ room: data.room }),
+                });
+                const dispatchData = await dispatchRes.json();
+                if (dispatchData.status !== "ok") {
+                    throw new Error(dispatchData.message || "Could not start voice agent");
+                }
+
+                await waitForAgentParticipant(livekitRoom);
+                attachExistingRemoteAudio(livekitRoom);
+
+                voiceActive = true;
+                btn.classList.remove("voice-connecting");
+                btn.classList.add("voice-active");
+                btn.textContent = "🔴";
+                btn.disabled = false;
+                showToast("🎙️ Listening… click 🔴 to stop", 4000);
+
+            } catch (err) {
+                console.error("Voice start failed:", err);
+                if (livekitRoom) {
+                    try { await livekitRoom.disconnect(); } catch (_) {}
+                    livekitRoom = null;
+                }
+                btn.classList.remove("voice-connecting");
+                btn.textContent = "🎤";
+                btn.disabled = false;   // ✅ always re-enable on error
+                showToast("❌ Voice failed: " + err.message, 5000);
+            }
+        }
+
+        // ✅ FIX: Fully reset audio element on stop so the next session
+        // starts with a clean slate — prevents stale srcObject / src from
+        // blocking audio on reconnect.  Also ensures btn.disabled is always
+        // cleared so the mic button never gets stuck after an error.
+        async function stopVoice() {
+            if (livekitRoom) {
+                try {
+                    livekitRoom.unregisterByteStreamHandler("lk.agent.session");
+                    livekitRoom.unregisterTextStreamHandler("lk.transcription");
+                } catch (_) {}
+
+                const audioEl = document.getElementById("remoteAudio");
+                if (audioEl) {
+                    // Detach all remote audio tracks first
+                    livekitRoom.remoteParticipants.forEach(participant => {
+                        participant.audioTrackPublications.forEach(pub => {
+                            if (pub.track && pub.track.kind === LivekitClient.Track.Kind.Audio) {
+                                try { pub.track.detach(audioEl); } catch (_) {}
+                            }
+                        });
+                    });
+                    // ✅ Fully reset the audio element for next session
+                    audioEl.pause();
+                    audioEl.srcObject = null;
+                    audioEl.src = "";
+                    audioEl.load();
+                }
+
+                try { await livekitRoom.disconnect(); } catch (_) {}
+                livekitRoom = null;
+            }
+
+            seenTranscripts.clear();
+            voiceActive = false;
+            const btn = document.getElementById("micBtn");
+            btn.classList.remove("voice-active", "voice-connecting");
+            btn.textContent = "🎤";
+            btn.disabled = false;   // ✅ always re-enable after stop
+            showToast("🔇 Voice session ended", 2500);
+        }
+
+        function appendVoiceBubble(role, text) {
+            document.getElementById("welcomeState").style.display = "none";
+            const list = document.getElementById("messagesList");
+            const el   = createMessageEl(
+                text,
+                role === "user" ? "user" : "assistant",
+                false,
+                true
+            );
+            list.appendChild(el);
+            requestAnimationFrame(() => el.classList.add("visible"));
+            scrollToBottom();
+        }
+
+    </script>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script>
+      window.addEventListener('load', () => {
+        setTimeout(() => {
+          const l = document.getElementById('loader');
+          if (l) l.classList.add('hidden');
+        }, 900);
+      });
+
+      (function init3D() {
+        const canvas = document.getElementById('bg-canvas');
+        if (!window.THREE || !canvas) return;
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(60, innerWidth/innerHeight, 0.1, 100);
+        camera.position.z = 9;
+        const renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true });
+        renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+        renderer.setSize(innerWidth, innerHeight);
+
+        scene.add(new THREE.AmbientLight(0xffffff, 0.55));
+        const d1 = new THREE.DirectionalLight(0xff6b6b, 1.0); d1.position.set(5,5,5); scene.add(d1);
+        const d2 = new THREE.DirectionalLight(0x88aaff, 0.5); d2.position.set(-5,-3,4); scene.add(d2);
+
+        const group = new THREE.Group(); scene.add(group);
+        const mats = {
+          red:   new THREE.MeshStandardMaterial({ color: 0xd92d20, metalness: 0.4, roughness: 0.25, transparent: true, opacity: 0.55 }),
+          white: new THREE.MeshStandardMaterial({ color: 0xffffff, metalness: 0.6, roughness: 0.2,  transparent: true, opacity: 0.5  }),
+          glass: new THREE.MeshStandardMaterial({ color: 0xff8a8a, metalness: 0.2, roughness: 0.05, transparent: true, opacity: 0.35 }),
+        };
+        const geos = [
+          new THREE.IcosahedronGeometry(0.9, 0),
+          new THREE.TorusGeometry(0.7, 0.22, 16, 60),
+          new THREE.OctahedronGeometry(0.85, 0),
+          new THREE.TorusKnotGeometry(0.55, 0.18, 80, 16),
+          new THREE.DodecahedronGeometry(0.8, 0),
+        ];
+        const objects = [];
+        for (let i = 0; i < 8; i++) {
+          const mesh = new THREE.Mesh(geos[i % geos.length], [mats.red, mats.white, mats.glass][i % 3]);
+          mesh.position.set((Math.random()-0.5)*16, (Math.random()-0.5)*10, (Math.random()-0.5)*6 - 3);
+          mesh.userData = {
+            rx:(Math.random()-0.5)*0.008, ry:(Math.random()-0.5)*0.008, rz:(Math.random()-0.5)*0.004,
+            fy: Math.random()*Math.PI*2, amp: 0.3+Math.random()*0.4,
+          };
+          group.add(mesh); objects.push(mesh);
+        }
+
+        const pGeo = new THREE.BufferGeometry();
+        const pCount = 250, pos = new Float32Array(pCount*3);
+        for (let i = 0; i < pCount*3; i++) pos[i] = (Math.random()-0.5)*30;
+        pGeo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+        const pMat = new THREE.PointsMaterial({ color: 0xff6b6b, size: 0.04, transparent: true, opacity: 0.5 });
+        const points = new THREE.Points(pGeo, pMat); scene.add(points);
+
+        const mouse = { x:0, y:0, tx:0, ty:0 };
+        addEventListener('mousemove', e => {
+          mouse.tx = (e.clientX/innerWidth - 0.5)*2;
+          mouse.ty = (e.clientY/innerHeight - 0.5)*2;
+        });
+        addEventListener('resize', () => {
+          camera.aspect = innerWidth/innerHeight; camera.updateProjectionMatrix();
+          renderer.setSize(innerWidth, innerHeight);
         });
 
-        const answer = await response.text();
-
-        typing.remove();
-
-        const botEl = createMessageEl(
-            answer,
-            'assistant',
-            true
-        );
-
-        list.appendChild(botEl);
-
-        requestAnimationFrame(() => {
-            botEl.classList.add('visible');
-        });
-
-    } catch (error) {
-
-        console.error(error);
-
-        typing.remove();
-
-        const botEl = createMessageEl(
-            "Server error. Please check Flask logs.",
-            "assistant"
-        );
-
-        list.appendChild(botEl);
-    }
-
-    document.getElementById('sendBtn').disabled = false;
-
-    scrollToBottom();
-}
-
-function handleKey(event) {
-    if (event.key === "Enter" && !event.shiftKey) {
-        event.preventDefault();
-        sendMessage();
-    }
-}
-
-function autoResize(el) {
-    el.style.height = "auto";
-    el.style.height = Math.min(el.scrollHeight, 140) + "px";
-}
-
-function scrollToBottom() {
-    const area = document.getElementById('messagesArea');
-    area.scrollTop = area.scrollHeight;
-}
-
-function insertPrompt(text) {
-    const input = document.getElementById('userInput');
-    input.value = text;
-    autoResize(input);
-    input.focus();
-}
-
-function clearChat() {
-    document.getElementById('messagesList').innerHTML = '';
-    document.getElementById('welcomeState').style.display = 'flex';
-    document.getElementById('userInput').value = '';
-}
-
-</script>
+        const clock = new THREE.Clock();
+        (function loop() {
+          const t = clock.getElapsedTime();
+          mouse.x += (mouse.tx - mouse.x)*0.04;
+          mouse.y += (mouse.ty - mouse.y)*0.04;
+          objects.forEach(o => {
+            o.rotation.x += o.userData.rx;
+            o.rotation.y += o.userData.ry;
+            o.rotation.z += o.userData.rz;
+            o.position.y += Math.sin(t + o.userData.fy)*0.003*o.userData.amp;
+          });
+          group.rotation.y = mouse.x*0.25;
+          group.rotation.x = mouse.y*0.18;
+          points.rotation.y = t*0.02;
+          renderer.render(scene, camera);
+          requestAnimationFrame(loop);
+        })();
+      })();
+    </script>
 
 </body>
 </html>
