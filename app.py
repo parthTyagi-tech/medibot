@@ -157,7 +157,7 @@ def build_prompt(history_text, user_memory, user=None):
 
 
 # ─────────────────────────────────────────────────────────────
-# Database Initialization
+# Database Initialization 
 # ─────────────────────────────────────────────────────────────
 
 with app.app_context():
