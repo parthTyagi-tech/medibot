@@ -20,3 +20,4 @@ flask-login
 flask-sqlalchemy
 Flask-Mail==0.10.0
 pinecone
+deepgram-sdk==3.7.7
