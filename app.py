@@ -133,7 +133,7 @@ def build_prompt(history_text, user_memory, user=None):
         f"clear, direct answers without unnecessary formality.\n\n"
         f"The user's name is {first_name}. "
         f"Use their name occasionally, not in every message.\n\n"
-        f"{('Conversation so far:\n' + history_text + chr(10)) if history_text else ''}"
+        ("Conversation so far:\n" + history_text + "\n") if history_text else ""
         f"Rules:\n"
         f"- Be natural and conversational.\n"
         f"- Never repeat or summarize what the user just said.\n"
