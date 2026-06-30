@@ -28,3 +28,14 @@ print(f"Number of chunks: {len(text_chunk)}")
 
 # Embeddings
 embedding = download_embeddings()
+
+# Import Pinecone Vector Store
+from langchain_pinecone import PineconeVectorStore
+
+print("Upserting chunks to Pinecone...")
+docsearch = PineconeVectorStore.from_documents(
+    documents=text_chunk,
+    embedding=embedding,
+    index_name="medical-chatbot"
+)
+print("Index successfully stored in Pinecone.")

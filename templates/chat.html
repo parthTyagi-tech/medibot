@@ -6,62 +6,84 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>MediAssist — AI Health Companion</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
-    <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=Source+Sans+Pro:wght@400;600;700&display=swap" rel="stylesheet" />
     <!-- LiveKit SDK -->
     <script src="https://cdn.jsdelivr.net/npm/livekit-client@2.11.4/dist/livekit-client.umd.min.js"></script>
+    <style>
+      /* Quick overrides/inline fixes for loading orb */
+      #loader {
+        position: fixed; inset: 0; z-index: 9999;
+        background: radial-gradient(circle at 50% 50%, #0d0d15 0%, #050508 100%);
+        display: flex; flex-direction: column; align-items: center; justify-content: center;
+        gap: 28px; transition: opacity 0.7s ease, visibility 0.7s ease;
+      }
+      #loader.hidden { opacity: 0; visibility: hidden; pointer-events: none; }
+      #loader .loader-orb { width: 88px; height: 88px; position: relative; transform-style: preserve-3d; animation: loaderSpin 2.2s linear infinite; }
+      #loader .loader-ring { position: absolute; inset: 0; border-radius: 50%; border: 2px solid transparent; border-top-color: var(--text-accent); border-right-color: rgba(99, 102, 241, 0.4); }
+      #loader .loader-ring:nth-child(2) { transform: rotateX(70deg); border-top-color: #fff; }
+      #loader .loader-ring:nth-child(3) { transform: rotateY(70deg); border-top-color: var(--text-crimson); }
+      @keyframes loaderSpin { 0% { transform: rotateX(0) rotateY(0); } 100% { transform: rotateX(360deg) rotateY(360deg); } }
+      #loader .loader-text { font-family: var(--font-display); color: #fff; font-size: 24px; letter-spacing: 2px; }
+      #loader .loader-text span { color: var(--text-accent); }
+      #loader .loader-sub { color: #888; font-size: 11px; letter-spacing: 0.3em; text-transform: uppercase; }
+      #loader .loader-bar { width: 220px; height: 2px; background: rgba(255,255,255,0.08); border-radius: 2px; overflow: hidden; }
+      #loader .loader-bar::after { content: ''; display: block; height: 100%; width: 40%; background: linear-gradient(90deg, transparent, var(--text-accent), transparent); animation: loadSlide 1.4s ease-in-out infinite; }
+      @keyframes loadSlide { 0% { transform: translateX(-100%); } 100% { transform: translateX(350%); } }
+
+      .history-menu {
+        display: none;
+        position: absolute;
+        right: 12px;
+        top: 48px;
+        background: #0f0f15;
+        border: 1px solid rgba(255,255,255,0.08);
+        border-radius: 10px;
+        z-index: 999;
+        box-shadow: 0 10px 25px rgba(0,0,0,0.5);
+      }
+      .history-menu button {
+        min-width: unset !important;
+        width: 120px !important;
+        height: 38px !important;
+        padding: 0 12px !important;
+        background: none !important;
+        border: none !important;
+        color: #ef4444 !important;
+        font-size: 12.5px !important;
+        text-align: left !important;
+        cursor: pointer !important;
+        box-shadow: none !important;
+        text-shadow: none !important;
+      }
+      .history-menu button:hover {
+        background: rgba(239, 68, 68, 0.08) !important;
+      }
+      .menu-btn {
+        position: absolute; right: 12px; top: 50%; transform: translateY(-50%);
+        background: none !important; border: none !important; color: var(--text-muted);
+        min-width: unset !important; width: 24px !important; height: 24px !important;
+        padding: 0 !important; cursor: pointer; font-size: 16px; box-shadow: none !important;
+        text-shadow: none !important;
+      }
+      .menu-btn:hover { color: var(--text-primary); }
+
+      /* Voice Toast status */
+      #voiceToast {
+        position: fixed; bottom: 100px; left: 50%; transform: translateX(-50%);
+        background: rgba(14, 14, 22, 0.9); border: 1px solid var(--border-glow);
+        color: #fff; padding: 10px 22px; border-radius: 99px; font-size: 13.5px;
+        z-index: 9000; pointer-events: none; opacity: 0; transition: opacity 0.3s ease;
+      }
+      #voiceToast.show { opacity: 1; }
+      
+      .voice-label { font-size: 10px; font-weight: 700; text-transform: uppercase; color: var(--text-accent); margin-bottom: 4px; display: block; }
+    </style>
 </head>
 
 <body>
 
-    <style>
-      #loader {
-        position: fixed; inset: 0; z-index: 9999;
-        background: radial-gradient(circle at 50% 50%, #1a1a1a 0%, #050505 100%);
-        display: flex; flex-direction: column; align-items: center; justify-content: center;
-        gap: 28px; transition: opacity 0.7s ease, visibility 0.7s ease;
-        font-family: 'Source Sans Pro', sans-serif;
-      }
-      #loader.hidden { opacity: 0; visibility: hidden; pointer-events: none; }
-      #loader .loader-orb { width: 88px; height: 88px; position: relative; transform-style: preserve-3d; animation: loaderSpin 2.2s linear infinite; }
-      #loader .loader-ring { position: absolute; inset: 0; border-radius: 50%; border: 2px solid transparent; border-top-color: #ff4d4d; border-right-color: rgba(255,77,77,0.4); }
-      #loader .loader-ring:nth-child(2) { transform: rotateX(70deg); border-top-color: #fff; }
-      #loader .loader-ring:nth-child(3) { transform: rotateY(70deg); border-top-color: #ff8a8a; }
-      @keyframes loaderSpin { 0% { transform: rotateX(0) rotateY(0); } 100% { transform: rotateX(360deg) rotateY(360deg); } }
-      #loader .loader-text { font-family: 'DM Serif Display', Georgia, serif; color: #fff; font-size: 22px; letter-spacing: 2px; }
-      #loader .loader-text span { color: #ff4d4d; font-style: italic; }
-      #loader .loader-sub { color: #888; font-size: 11px; letter-spacing: 0.3em; text-transform: uppercase; }
-      #loader .loader-bar { width: 220px; height: 2px; background: rgba(255,255,255,0.08); border-radius: 2px; overflow: hidden; }
-      #loader .loader-bar::after { content: ''; display: block; height: 100%; width: 40%; background: linear-gradient(90deg, transparent, #ff4d4d, transparent); animation: loadSlide 1.4s ease-in-out infinite; }
-      @keyframes loadSlide { 0% { transform: translateX(-100%); } 100% { transform: translateX(350%); } }
-
-      #bg-canvas { position: fixed; inset: 0; z-index: 0; pointer-events: none; }
-      .app-shell, .ambient-bg { position: relative; z-index: 1; }
-      #themeToggle svg { transition: transform 0.5s ease; }
-      #themeToggle:hover svg { transform: rotate(180deg); }
-
-      #micBtn { transition: all 0.2s ease; position: relative; }
-      #micBtn.voice-connecting { opacity: 0.6; cursor: wait; }
-      #micBtn.voice-active {
-        background: rgba(220, 38, 38, 0.15) !important;
-        color: #dc2626 !important;
-        animation: micPulse 1.5s ease-in-out infinite;
-      }
-      @keyframes micPulse {
-        0%, 100% { box-shadow: 0 0 0 0 rgba(220,38,38,0.4); }
-        50%       { box-shadow: 0 0 0 8px rgba(220,38,38,0); }
-      }
-      .voice-label { font-size: 10px; opacity: 0.55; margin-bottom: 3px; display: block; }
-      #voiceToast {
-        position: fixed; bottom: 90px; left: 50%; transform: translateX(-50%);
-        background: rgba(15,23,42,0.92); color: #fff; padding: 8px 18px;
-        border-radius: 20px; font-size: 13px; font-family: 'Source Sans Pro', sans-serif;
-        z-index: 9000; pointer-events: none; opacity: 0; transition: opacity 0.3s ease; white-space: nowrap;
-      }
-      #voiceToast.show { opacity: 1; }
-    </style>
-
     <div id="voiceToast">🎙️ Connecting…</div>
 
+    <!-- ===== Premium Loader Screen ===== -->
     <div id="loader">
       <div class="loader-orb">
         <div class="loader-ring"></div>
@@ -70,19 +92,20 @@
       </div>
       <div class="loader-text">Medi<span>Assist</span></div>
       <div class="loader-bar"></div>
-      <div class="loader-sub">Connecting to AI Companion</div>
+      <div class="loader-sub">Connecting to Medical Command Center</div>
     </div>
 
+    <!-- WebGL interactive canvas -->
     <canvas id="bg-canvas"></canvas>
 
     <div class="ambient-bg">
         <div class="orb orb-1"></div>
         <div class="orb orb-2"></div>
-        <div class="orb orb-3"></div>
     </div>
 
     <div class="app-shell">
 
+        <!-- Sidebar Glass Panel -->
         <aside class="sidebar">
             <div class="sidebar-logo">
                 <div class="logo-icon">
@@ -90,15 +113,15 @@
                         <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 15v-4H7l5-8v4h4l-5 8z" fill="currentColor" />
                     </svg>
                 </div>
-                <span class="logo-text">MediAssist</span>
+                <span class="logo-text" style="font-family: var(--font-display); font-weight: 700; font-size: 18px;">MediAssist</span>
             </div>
 
-            <button onclick="newChat()">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <button class="new-chat-btn" onclick="newChat()">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
                     <line x1="12" y1="5" x2="12" y2="19" />
                     <line x1="5" y1="12" x2="19" y2="12" />
                 </svg>
-                New Chat
+                New Consultation
             </button>
 
             <div class="sidebar-section-label">Recent Consultations</div>
@@ -107,7 +130,7 @@
                 {% for session in past_sessions %}
                 <div class="history-row">
                     <button class="history-btn" data-session="{{ session.id }}" onclick="loadSession({{ session.id }})">
-                        {{ session.title }}
+                        <span class="history-title-text">{{ session.title }}</span>
                     </button>
                     <button class="menu-btn" onclick="toggleMenu(event, {{ session.id }})">⋮</button>
                     <div class="history-menu" id="menu-{{ session.id }}">
@@ -118,49 +141,65 @@
             </nav>
 
             <div class="sidebar-footer">
+                <button class="btn-glossy btn-secondary memory-manage-btn" onclick="openMemoryModal()" style="height: 38px; width: 100% !important; border-radius: 12px; margin-bottom: 14px; font-size: 12.5px; padding: 0 12px;">
+                    🧠 Manage AI Memory
+                </button>
                 <div class="disclaimer-badge">
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
                         <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z" />
                     </svg>
-                    For information only. Not a substitute for professional medical advice.
+                    For informational purposes only. Consult a physician for emergencies.
                 </div>
             </div>
         </aside>
 
+        <!-- Main Chat Center -->
         <main class="chat-panel">
             <header class="chat-header">
                 <div class="header-left">
                     <div class="status-dot"></div>
                     <div>
-                        <div class="header-title">Medical AI Assistant</div>
-                        <div class="header-sub">Online · Responds instantly</div>
+                        <div class="header-title">Medical Assistant AI</div>
+                        <div class="header-sub">MediAssist Companion · Online</div>
                     </div>
                 </div>
+                
                 <div class="header-actions">
-                    <button class="btn-icon" id="micBtn" onclick="toggleVoice()" title="Start / Stop voice chat">🎤</button>
-                    <button class="btn-icon" title="Toggle theme" onclick="toggleTheme()" id="themeToggle">
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
-                        </svg>
+                    <!-- Premium Pill Mic Button -->
+                    <button class="btn-glossy voice-btn" id="micBtn" onclick="toggleVoice()" title="Start / Stop Voice Chat">
+                        <span class="voice-dot"></span>
+                        <span class="voice-mic-icon">🎙️</span>
+                        <span class="voice-text" id="voiceBtnText">Start Voice Consultation</span>
                     </button>
-                    <button class="btn-icon" title="Clear chat" onclick="clearChat()">
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <polyline points="1 4 1 10 7 10" />
-                            <path d="M3.51 15a9 9 0 1 0 .49-3.51" />
-                        </svg>
-                    </button>
-                    <div class="user-info">
+                    
+                    <div class="header-utilities">
+                        <button class="btn-icon" title="Toggle Theme" onclick="toggleTheme()" id="themeToggle">
+                            <svg id="theme-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+                            </svg>
+                        </button>
+                        
+                        <button class="btn-icon" title="Clear Session" onclick="clearChat()">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <polyline points="1 4 1 10 7 10" />
+                                <path d="M3.51 15a9 9 0 1 0 .49-3.51" />
+                            </svg>
+                        </button>
+                    </div>
+                    
+                    <div class="user-info" style="display:flex; align-items:center; gap:10px; margin-left:12px; border-left:1px solid rgba(255,255,255,0.06); padding-left:16px;">
                         {% if user.avatar %}
-                        <img src="{{ user.avatar }}" class="user-avatar" alt="{{ user.name }}" />
+                        <img src="{{ user.avatar }}" class="user-avatar" alt="{{ user.name }}" style="width:32px; height:32px; border-radius:50%; object-fit:cover;" />
                         {% else %}
-                        <div class="user-avatar-fallback">{{ user.name[0] | upper }}</div>
+                        <div class="user-avatar-fallback" style="width:32px; height:32px; border-radius:50%; background:var(--text-accent); color:#fff; display:grid; place-items:center; font-weight:700;">{{ user.name[0] | upper }}</div>
                         {% endif %}
-                        <span class="user-name">{{ user.name }}</span>
-                        <a href="/logout" class="btn-glossy">Sign out</a>
+                        <span class="user-name" style="font-weight:500;">{{ user.name }}</span>
+                        <a href="/logout" class="btn-glossy btn-secondary" style="height:36px; padding:0 14px; min-width:unset; font-size:12.5px;">Sign out</a>
                     </div>
                 </div>
             </header>
 
+            <!-- Chat screen console -->
             <div class="messages-area" id="messagesArea">
                 <div class="welcome-state" id="welcomeState">
                     <div class="welcome-pulse">
@@ -172,23 +211,23 @@
                         </div>
                     </div>
                     <h2 class="welcome-title">How can I help you today?</h2>
-                    <p class="welcome-sub">Ask me about symptoms, medications, wellness, or general health questions. I'm here to provide information and guidance.</p>
+                    <p class="welcome-sub">Describe symptoms, ask about dosage parameters, or request wellness plans. I am ready to assist.</p>
                     <div class="suggestion-chips">
-                        <button onclick="insertPrompt('I have a headache and mild fever, what could it be?')">Headache &amp; fever</button>
-                        <button onclick="insertPrompt('What foods help boost the immune system?')">Immune foods</button>
-                        <button onclick="insertPrompt('How do I manage stress and anxiety naturally?')">Anxiety help</button>
-                        <button onclick="insertPrompt('What are the warning signs of diabetes?')">Diabetes signs</button>
+                        <button onclick="insertPrompt('I have a headache and mild fever, what could it be?')">Headache &amp; Fever</button>
+                        <button onclick="insertPrompt('What foods help boost the immune system?')">Immune Foods</button>
+                        <button onclick="insertPrompt('How do I manage stress and anxiety naturally?')">Manage Stress</button>
                     </div>
                 </div>
                 <div id="messagesList"></div>
             </div>
 
+            <!-- Input area console -->
             <div class="input-area">
                 <div class="input-wrap">
                     <textarea
                         id="userInput"
                         class="chat-input"
-                        placeholder="Describe your symptoms or ask a health question…"
+                        placeholder="Describe your symptoms or ask a medical question..."
                         rows="1"
                         onkeydown="handleKey(event)"
                         oninput="autoResize(this)"
@@ -200,21 +239,34 @@
                         </svg>
                     </button>
                 </div>
-                <p class="input-disclaimer">MediAssist provides general health information only. Always consult a licensed physician for medical decisions.</p>
+                <p class="input-disclaimer">MediAssist AI is an advisory guidance tool only. Always seek direct professional medical diagnosis.</p>
             </div>
         </main>
 
     </div>
 
-    <!-- Hidden audio container for LiveKit agent audio -->
+    <!-- Hidden audio element for voice channel -->
     <div id="audio-sink" style="display:none">
         <audio id="remoteAudio" autoplay playsinline></audio>
     </div>
 
+    <!-- Glassmorphic Memory Management Modal -->
+    <div class="modal-overlay" id="memoryModal" onclick="closeMemoryModal(event)">
+        <div class="modal-card" onclick="event.stopPropagation()">
+            <h3 class="modal-title">🧠 Personalization Memory</h3>
+            <p class="modal-sub">MediAssist automatically extracts medical facts (symptoms, allergies, medications) to carry context across chats.</p>
+            <div class="memory-content" id="memoryContent">
+                Loading medical memory...
+            </div>
+            <div class="modal-actions">
+                <button class="btn-glossy btn-secondary" onclick="clearMemory()" style="height:42px; border-radius:12px; font-size:13px; color:var(--text-crimson) !important;">Clear Memory</button>
+                <button class="btn-glossy" onclick="closeMemoryModal(null)" style="height:42px; border-radius:12px; font-size:13px;">Done</button>
+            </div>
+        </div>
+    </div>
+
     <script>
-
-        // ── Chat history ──────────────────────────────────────
-
+        // ── Session actions ───────────────────────────────────
         async function newChat() {
             await fetch("/new_chat", { method: "POST" });
             location.reload();
@@ -246,16 +298,18 @@
             menu.style.display = menu.style.display === "block" ? "none" : "block";
         }
 
+        document.addEventListener('click', () => {
+            document.querySelectorAll(".history-menu").forEach(menu => { menu.style.display = "none"; });
+        });
+
         async function deleteSession(sessionId) {
             if (!confirm("Delete this chat?")) return;
             try {
                 const response = await fetch(`/delete_session/${sessionId}`, { method: "POST" });
                 const data = await response.json();
                 if (data.success) { location.reload(); }
-                else { alert("Failed to delete chat"); }
             } catch (error) {
                 console.error(error);
-                alert("Error deleting chat");
             }
         }
 
@@ -266,8 +320,7 @@
             document.getElementById("userInput").value = "";
         }
 
-        // ── Message rendering ─────────────────────────────────
-
+        // ── Bubble rendering ────────────────────────────────
         function createMessageEl(content, role, isHTML = false, isVoice = false) {
             const wrap = document.createElement("div");
             wrap.className = `message-wrap ${role}`;
@@ -275,6 +328,7 @@
             if (role === "assistant") {
                 const avatar = document.createElement("div");
                 avatar.className = "avatar";
+                avatar.style = "width:32px; height:32px; border-radius:50%; background:rgba(99,102,241,0.08); border:1px solid var(--border-glow); display:grid; place-items:center; color:var(--text-accent); flex-shrink:0;";
                 avatar.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 15v-4H7l5-8v4h4l-5 8z"/></svg>`;
                 wrap.appendChild(avatar);
             }
@@ -285,7 +339,7 @@
             if (isVoice) {
                 const label = document.createElement("span");
                 label.className = "voice-label";
-                label.textContent = role === "user" ? "🎙️ Voice" : "🎙️ Voice reply";
+                label.textContent = role === "user" ? "🎙️ Voice input" : "🎙️ Voice response";
                 bubble.appendChild(label);
             }
 
@@ -310,18 +364,19 @@
 
             const avatar = document.createElement("div");
             avatar.className = "avatar";
+            avatar.style = "width:32px; height:32px; border-radius:50%; background:rgba(99,102,241,0.08); border:1px solid var(--border-glow); display:grid; place-items:center; color:var(--text-accent); flex-shrink:0;";
             avatar.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 15v-4H7l5-8v4h4l-5 8z"/></svg>`;
             wrap.appendChild(avatar);
 
             const bubble = document.createElement("div");
             bubble.className = "bubble typing-bubble";
+            bubble.style = "display:flex; gap:6px; align-items:center;";
             bubble.innerHTML = `<span class="dot"></span><span class="dot"></span><span class="dot"></span>`;
             wrap.appendChild(bubble);
             return wrap;
         }
 
-        // ── Text chat ─────────────────────────────────────────
-
+        // ── Text chat handling ─────────────────────────────────
         async function sendMessage() {
             const input = document.getElementById("userInput");
             const text  = input.value.trim();
@@ -344,6 +399,9 @@
             list.appendChild(typing);
             scrollToBottom();
 
+            // Trigger reactive Three.js pulse when sending message
+            if (window.triggerSpherePulse) window.triggerSpherePulse(1.5, 8.0);
+
             try {
                 const formData = new FormData();
                 formData.append("msg", text);
@@ -356,10 +414,13 @@
                 const botEl = createMessageEl(answer, "assistant", true);
                 list.appendChild(botEl);
                 requestAnimationFrame(() => botEl.classList.add("visible"));
+                
+                // Pulse again on response
+                if (window.triggerSpherePulse) window.triggerSpherePulse(1.8, 6.0);
             } catch (error) {
                 console.error(error);
                 typing.remove();
-                const botEl = createMessageEl("Server error. Please check Flask logs.", "assistant");
+                const botEl = createMessageEl("Failed to resolve request. Check console logs.", "assistant");
                 list.appendChild(botEl);
             }
 
@@ -391,21 +452,28 @@
             input.focus();
         }
 
-        // ── Theme ─────────────────────────────────────────────
-
-        function toggleTheme() {
-            const isDark = document.body.classList.toggle("dark");
-            localStorage.setItem("theme", isDark ? "dark" : "light");
+        // ── Theme toggle ──────────────────────────────────────
+        function setThemeIcon(isLight) {
+            const i = document.getElementById('theme-icon');
+            if (!i) return;
+            i.innerHTML = isLight
+              ? '<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>'
+              : '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/>';
         }
-
+        function toggleTheme() {
+            const isLight = document.body.classList.toggle("light");
+            localStorage.setItem("theme", isLight ? "light" : "dark");
+            setThemeIcon(isLight);
+            if (window.updateSphereColor) window.updateSphereColor(!isLight);
+        }
         (function () {
-            if (localStorage.getItem("theme") === "dark") {
-                document.body.classList.add("dark");
+            if (localStorage.getItem("theme") === "light") {
+                document.body.classList.add("light");
             }
+            setThemeIcon(document.body.classList.contains("light"));
         })();
 
-        // ── Voice chat via LiveKit ────────────────────────────
-
+        // ── LiveKit Voice channel ─────────────────────────────
         let livekitRoom = null;
         let voiceActive = false;
         let toastTimer  = null;
@@ -415,17 +483,12 @@
             if (!track || track.kind !== LivekitClient.Track.Kind.Audio) return;
             const audioEl = document.getElementById("remoteAudio");
             if (!audioEl) return;
-            try {
-                track.attach(audioEl);
-            } catch (e) {
-                console.warn("track.attach failed:", e);
-                return;
-            }
+            try { track.attach(audioEl); } catch (e) { return; }
             audioEl.muted = false;
             audioEl.volume = 1.0;
             const playPromise = audioEl.play();
             if (playPromise && typeof playPromise.catch === "function") {
-                playPromise.catch((err) => console.warn("Audio play blocked:", err));
+                playPromise.catch(() => {});
             }
         }
 
@@ -444,11 +507,7 @@
             if (attrs["lk.agent.state"]) return true;
             const name = (participant.name || "").toLowerCase();
             const id = (participant.identity || "").toLowerCase();
-            return (
-                name.includes("agent") ||
-                name.includes("mediassist") ||
-                id.includes("agent")
-            );
+            return name.includes("agent") || name.includes("mediassist") || id.includes("agent");
         }
 
         function findAgentParticipant(room) {
@@ -466,27 +525,22 @@
         function waitForAgentParticipant(room, timeoutMs = 45000) {
             return new Promise((resolve, reject) => {
                 const existing = findAgentParticipant(room);
-                if (existing) {
-                    resolve(existing);
-                    return;
-                }
+                if (existing) { resolve(existing); return; }
 
                 const timer = setTimeout(() => {
                     cleanup();
-                    reject(new Error("Voice agent did not join in time"));
+                    reject(new Error("Voice agent connection timed out"));
                 }, timeoutMs);
 
                 const onConnected = (participant) => {
                     if (!participant || participant.isLocal) return;
-                    cleanup();
-                    resolve(participant);
+                    cleanup(); resolve(participant);
                 };
 
                 const onTrackSubscribed = (track, _pub, participant) => {
                     if (!participant || participant.isLocal) return;
                     if (track.kind === LivekitClient.Track.Kind.Audio) {
-                        cleanup();
-                        resolve(participant);
+                        cleanup(); resolve(participant);
                     }
                 };
 
@@ -508,22 +562,15 @@
                         await reader.readAll();
                         return;
                     }
-                    for await (const _ of reader) { /* drain */ }
-                } catch (_) { /* stream closed */ }
+                    for await (const _ of reader) {}
+                } catch (_) {}
             };
-
-            room.registerByteStreamHandler("lk.agent.session", (reader) => {
-                void drainStream(reader);
-            });
-            room.registerTextStreamHandler("lk.transcription", (reader) => {
-                void drainStream(reader);
-            });
+            room.registerByteStreamHandler("lk.agent.session", (reader) => { void drainStream(reader); });
+            room.registerTextStreamHandler("lk.transcription", (reader) => { void drainStream(reader); });
         }
 
         function parseTranscriptPayload(payload) {
-            const bytes = payload instanceof Uint8Array
-                ? payload
-                : new Uint8Array(payload);
+            const bytes = payload instanceof Uint8Array ? payload : new Uint8Array(payload);
             return JSON.parse(new TextDecoder().decode(bytes));
         }
 
@@ -533,6 +580,9 @@
             if (seenTranscripts.has(key)) return;
             seenTranscripts.add(key);
             appendVoiceBubble(json.role, json.text);
+            
+            // Pulse Three.js sphere reactively when voice transcript updates
+            if (window.triggerSpherePulse) window.triggerSpherePulse(1.6, 6.0);
         }
 
         function showToast(msg, durationMs = 3000) {
@@ -545,16 +595,9 @@
             }
         }
 
-        function hideToast() {
-            document.getElementById("voiceToast").classList.remove("show");
-        }
-
         async function toggleVoice() {
-            if (!voiceActive) {
-                await startVoice();
-            } else {
-                await stopVoice();
-            }
+            if (!voiceActive) { await startVoice(); }
+            else { await stopVoice(); }
         }
 
         async function startVoice() {
@@ -562,71 +605,38 @@
             const btn = document.getElementById("micBtn");
             btn.classList.add("voice-connecting");
             btn.disabled = true;
+            document.getElementById("voiceBtnText").textContent = "Connecting...";
             seenTranscripts.clear();
-            showToast("🎙️ Connecting to voice…", 0);
+            showToast("🎙️ Connecting to voice room...", 0);
 
             try {
                 const res  = await fetch("/livekit_token");
                 const data = await res.json();
-                if (!res.ok || !data.token) {
-                    throw new Error(data.error || "No token from server");
-                }
+                if (!res.ok || !data.token) { throw new Error(data.error || "No token from server"); }
 
                 livekitRoom = new LivekitClient.Room({
                     adaptiveStream: true,
                     dynacast: true,
-                    audioCaptureDefaults: {
-                        autoGainControl: true,
-                        echoCancellation: true,
-                        noiseSuppression: true,
-                    },
+                    audioCaptureDefaults: { autoGainControl: true, echoCancellation: true, noiseSuppression: true },
                 });
 
                 registerLiveKitStreamHandlers(livekitRoom);
 
-                livekitRoom.on(
-                    LivekitClient.RoomEvent.DataReceived,
-                    (payload, participant, _kind, topic) => {
-                        if (participant && participant.isLocal) return;
-                        try {
-                            handleTranscriptMessage(parseTranscriptPayload(payload));
-                        } catch (e) {
-                            if (!topic || topic === "mediassist.transcript" || topic === "") {
-                                console.warn("Data parse error:", e);
-                            }
-                        }
-                    }
-                );
+                livekitRoom.on(LivekitClient.RoomEvent.DataReceived, (payload, participant) => {
+                    if (participant && participant.isLocal) return;
+                    try { handleTranscriptMessage(parseTranscriptPayload(payload)); } catch (e) {}
+                });
 
                 livekitRoom.on(LivekitClient.RoomEvent.TrackSubscribed, (track, _pub, participant) => {
                     if (!participant || participant.isLocal) return;
                     attachRemoteAudio(track);
                 });
 
-                livekitRoom.on(LivekitClient.RoomEvent.TrackPublished, (pub, participant) => {
-                    if (!participant || participant.isLocal) return;
-                    if (pub.track) attachRemoteAudio(pub.track);
-                });
-
-                livekitRoom.on(LivekitClient.RoomEvent.ParticipantConnected, (participant) => {
-                    if (!participant || participant.isLocal) return;
-                    attachExistingRemoteAudio(livekitRoom);
-                });
-
-                livekitRoom.on(LivekitClient.RoomEvent.TrackUnsubscribed, (track) => {
-                    if (track.kind === LivekitClient.Track.Kind.Audio) {
-                        const audioEl = document.getElementById("remoteAudio");
-                        if (audioEl) {
-                            try { track.detach(audioEl); } catch (_) {}
-                        }
-                    }
-                });
-
                 await livekitRoom.connect(data.url, data.token);
                 await livekitRoom.startAudio();
                 await livekitRoom.localParticipant.setMicrophoneEnabled(true);
 
-                showToast("🎙️ Starting MediAssist agent…", 0);
+                showToast("🎙️ Starting MediAssist Agent...", 0);
 
                 const dispatchRes = await fetch("/dispatch_agent", {
                     method: "POST",
@@ -634,9 +644,7 @@
                     body: JSON.stringify({ room: data.room }),
                 });
                 const dispatchData = await dispatchRes.json();
-                if (dispatchData.status !== "ok") {
-                    throw new Error(dispatchData.message || "Could not start voice agent");
-                }
+                if (dispatchData.status !== "ok") { throw new Error(dispatchData.message || "Failed to launch voice worker"); }
 
                 await waitForAgentParticipant(livekitRoom);
                 attachExistingRemoteAudio(livekitRoom);
@@ -644,163 +652,245 @@
                 voiceActive = true;
                 btn.classList.remove("voice-connecting");
                 btn.classList.add("voice-active");
-                btn.textContent = "🔴";
                 btn.disabled = false;
-                showToast("🎙️ Listening… click 🔴 to stop", 4000);
+                document.getElementById("voiceBtnText").textContent = "Disconnect Voice";
+                showToast("🎙️ Listening - Speak naturally", 3000);
+                
+                // Continuous voice pulsing animation trigger
+                if (window.setVoiceSpeakingState) window.setVoiceSpeakingState(true);
 
             } catch (err) {
-                console.error("Voice start failed:", err);
-                if (livekitRoom) {
-                    try { await livekitRoom.disconnect(); } catch (_) {}
-                    livekitRoom = null;
-                }
+                console.error(err);
+                if (livekitRoom) { try { await livekitRoom.disconnect(); } catch (_) {} livekitRoom = null; }
                 btn.classList.remove("voice-connecting");
-                btn.textContent = "🎤";
-                btn.disabled = false;   // ✅ always re-enable on error
-                showToast("❌ Voice failed: " + err.message, 5000);
+                btn.disabled = false;
+                document.getElementById("voiceBtnText").textContent = "Start Voice Consultation";
+                showToast("❌ Connection failed: " + err.message, 4000);
             }
         }
 
-        // ✅ FIX: Fully reset audio element on stop so the next session
-        // starts with a clean slate — prevents stale srcObject / src from
-        // blocking audio on reconnect.  Also ensures btn.disabled is always
-        // cleared so the mic button never gets stuck after an error.
         async function stopVoice() {
+            if (window.setVoiceSpeakingState) window.setVoiceSpeakingState(false);
             if (livekitRoom) {
-                try {
-                    livekitRoom.unregisterByteStreamHandler("lk.agent.session");
-                    livekitRoom.unregisterTextStreamHandler("lk.transcription");
-                } catch (_) {}
-
                 const audioEl = document.getElementById("remoteAudio");
                 if (audioEl) {
-                    // Detach all remote audio tracks first
-                    livekitRoom.remoteParticipants.forEach(participant => {
-                        participant.audioTrackPublications.forEach(pub => {
-                            if (pub.track && pub.track.kind === LivekitClient.Track.Kind.Audio) {
-                                try { pub.track.detach(audioEl); } catch (_) {}
-                            }
-                        });
-                    });
-                    // ✅ Fully reset the audio element for next session
                     audioEl.pause();
                     audioEl.srcObject = null;
                     audioEl.src = "";
-                    audioEl.load();
                 }
-
                 try { await livekitRoom.disconnect(); } catch (_) {}
                 livekitRoom = null;
             }
-
-            seenTranscripts.clear();
             voiceActive = false;
             const btn = document.getElementById("micBtn");
             btn.classList.remove("voice-active", "voice-connecting");
-            btn.textContent = "🎤";
-            btn.disabled = false;   // ✅ always re-enable after stop
-            showToast("🔇 Voice session ended", 2500);
+            btn.disabled = false;
+            document.getElementById("voiceBtnText").textContent = "Start Voice Consultation";
+            showToast("🔇 Voice stream closed", 2000);
         }
 
         function appendVoiceBubble(role, text) {
             document.getElementById("welcomeState").style.display = "none";
             const list = document.getElementById("messagesList");
-            const el   = createMessageEl(
-                text,
-                role === "user" ? "user" : "assistant",
-                false,
-                true
-            );
+            const el   = createMessageEl(text, role === "user" ? "user" : "assistant", false, true);
             list.appendChild(el);
             requestAnimationFrame(() => el.classList.add("visible"));
             scrollToBottom();
         }
 
+        // Auto-load last active session if present on page load
+        window.addEventListener('DOMContentLoaded', () => {
+            const activeSessionId = "{{ active_session_id or '' }}";
+            if (activeSessionId) {
+                loadSession(activeSessionId);
+            }
+        });
+
+        // AI Memory Modal management functions
+        async function openMemoryModal() {
+            const modal = document.getElementById("memoryModal");
+            const content = document.getElementById("memoryContent");
+            modal.classList.add("active");
+            content.innerHTML = '<span class="loading-pulse">Retrieving profile memory...</span>';
+            
+            try {
+                const res = await fetch("/get_memory");
+                const data = await res.json();
+                if (data.memory && data.memory.trim()) {
+                    content.innerHTML = data.memory.replace(/\n/g, "<br>");
+                } else {
+                    content.innerHTML = '<span style="color:var(--text-muted); font-style:italic;">No medical facts stored yet. Describe symptoms, diagnoses, or allergies in chat, and they will automatically populate here.</span>';
+                }
+            } catch (e) {
+                content.innerHTML = '<span style="color:var(--text-crimson);">Failed to retrieve memory database.</span>';
+            }
+        }
+
+        function closeMemoryModal(event) {
+            if (!event || event.target === document.getElementById("memoryModal")) {
+                document.getElementById("memoryModal").classList.remove("active");
+            }
+        }
+
+        async function clearMemory() {
+            if (!confirm("Clear all AI memory? This will reset custom medical context.")) return;
+            const content = document.getElementById("memoryContent");
+            content.innerHTML = 'Clearing profile database...';
+            try {
+                const res = await fetch("/clear_memory", { method: "POST" });
+                const data = await res.json();
+                if (data.status === "ok") {
+                    content.innerHTML = '<span style="color:#34d399;">Memory database cleared successfully.</span>';
+                } else {
+                    content.innerHTML = '<span style="color:var(--text-crimson);">Error clearing database.</span>';
+                }
+            } catch (e) {
+                content.innerHTML = '<span style="color:var(--text-crimson);">Connection error.</span>';
+            }
+        }
     </script>
 
+    <!-- ===== Three.js WebGL Hologram Canvas Logic ===== -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script>
       window.addEventListener('load', () => {
         setTimeout(() => {
           const l = document.getElementById('loader');
           if (l) l.classList.add('hidden');
-        }, 900);
+        }, 800);
       });
 
-      (function init3D() {
+      /* ===== Futuristic Hologram Orb Scene ===== */
+      (function initFuturisticSphere() {
         const canvas = document.getElementById('bg-canvas');
         if (!window.THREE || !canvas) return;
+
         const scene = new THREE.Scene();
-        const camera = new THREE.PerspectiveCamera(60, innerWidth/innerHeight, 0.1, 100);
-        camera.position.z = 9;
+        const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 100);
+        camera.position.z = 12;
+
         const renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true });
         renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
-        renderer.setSize(innerWidth, innerHeight);
+        renderer.setSize(window.innerWidth, window.innerHeight);
 
-        scene.add(new THREE.AmbientLight(0xffffff, 0.55));
-        const d1 = new THREE.DirectionalLight(0xff6b6b, 1.0); d1.position.set(5,5,5); scene.add(d1);
-        const d2 = new THREE.DirectionalLight(0x88aaff, 0.5); d2.position.set(-5,-3,4); scene.add(d2);
+        // Hologram glowing points sphere
+        const particleCount = 1200;
+        const geometry = new THREE.BufferGeometry();
+        const positions = new Float32Array(particleCount * 3);
+        const originalPositions = [];
 
-        const group = new THREE.Group(); scene.add(group);
-        const mats = {
-          red:   new THREE.MeshStandardMaterial({ color: 0xd92d20, metalness: 0.4, roughness: 0.25, transparent: true, opacity: 0.55 }),
-          white: new THREE.MeshStandardMaterial({ color: 0xffffff, metalness: 0.6, roughness: 0.2,  transparent: true, opacity: 0.5  }),
-          glass: new THREE.MeshStandardMaterial({ color: 0xff8a8a, metalness: 0.2, roughness: 0.05, transparent: true, opacity: 0.35 }),
-        };
-        const geos = [
-          new THREE.IcosahedronGeometry(0.9, 0),
-          new THREE.TorusGeometry(0.7, 0.22, 16, 60),
-          new THREE.OctahedronGeometry(0.85, 0),
-          new THREE.TorusKnotGeometry(0.55, 0.18, 80, 16),
-          new THREE.DodecahedronGeometry(0.8, 0),
-        ];
-        const objects = [];
-        for (let i = 0; i < 8; i++) {
-          const mesh = new THREE.Mesh(geos[i % geos.length], [mats.red, mats.white, mats.glass][i % 3]);
-          mesh.position.set((Math.random()-0.5)*16, (Math.random()-0.5)*10, (Math.random()-0.5)*6 - 3);
-          mesh.userData = {
-            rx:(Math.random()-0.5)*0.008, ry:(Math.random()-0.5)*0.008, rz:(Math.random()-0.5)*0.004,
-            fy: Math.random()*Math.PI*2, amp: 0.3+Math.random()*0.4,
-          };
-          group.add(mesh); objects.push(mesh);
+        const radius = 3.5;
+        for (let i = 0; i < particleCount; i++) {
+          // Uniform spherical coordinates distribution
+          const u = Math.random();
+          const v = Math.random();
+          const theta = u * 2.0 * Math.PI;
+          const phi = Math.acos(2.0 * v - 1.0);
+          
+          const x = radius * Math.sin(phi) * Math.cos(theta);
+          const y = radius * Math.sin(phi) * Math.sin(theta);
+          const z = radius * Math.cos(phi);
+
+          positions[i * 3] = x;
+          positions[i * 3 + 1] = y;
+          positions[i * 3 + 2] = z;
+
+          originalPositions.push(new THREE.Vector3(x, y, z));
         }
 
-        const pGeo = new THREE.BufferGeometry();
-        const pCount = 250, pos = new Float32Array(pCount*3);
-        for (let i = 0; i < pCount*3; i++) pos[i] = (Math.random()-0.5)*30;
-        pGeo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-        const pMat = new THREE.PointsMaterial({ color: 0xff6b6b, size: 0.04, transparent: true, opacity: 0.5 });
-        const points = new THREE.Points(pGeo, pMat); scene.add(points);
+        geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
 
-        const mouse = { x:0, y:0, tx:0, ty:0 };
-        addEventListener('mousemove', e => {
-          mouse.tx = (e.clientX/innerWidth - 0.5)*2;
-          mouse.ty = (e.clientY/innerHeight - 0.5)*2;
+        const mat = new THREE.PointsMaterial({
+          color: 0x6366f1,
+          size: 0.05,
+          transparent: true,
+          opacity: 0.65,
+          blending: THREE.AdditiveBlending
         });
-        addEventListener('resize', () => {
-          camera.aspect = innerWidth/innerHeight; camera.updateProjectionMatrix();
-          renderer.setSize(innerWidth, innerHeight);
+
+        const sphere = new THREE.Points(geometry, mat);
+        scene.add(sphere);
+
+        // Add some orbit rings
+        const ringGeo = new THREE.RingGeometry(4.2, 4.25, 64);
+        const ringMat = new THREE.MeshBasicMaterial({ color: 0x818cf8, side: THREE.DoubleSide, transparent: true, opacity: 0.15 });
+        const ring = new THREE.Mesh(ringGeo, ringMat);
+        ring.rotation.x = Math.PI / 2.5;
+        scene.add(ring);
+
+        // Reactive properties
+        let pulseAmplitude = 0.0;
+        let pulseSpeed = 1.0;
+        let isVoiceSpeaking = false;
+
+        window.triggerSpherePulse = function(intensity = 1.5, speed = 8.0) {
+          pulseAmplitude = intensity;
+          pulseSpeed = speed;
+        };
+
+        window.setVoiceSpeakingState = function(state) {
+          isVoiceSpeaking = state;
+        };
+
+        window.updateSphereColor = function(isDark) {
+          mat.color.set(isDark ? 0x818cf8 : 0x4f46e5);
+          ringMat.color.set(isDark ? 0x818cf8 : 0x4f46e5);
+        };
+
+        const mouse = { x: 0, y: 0, tx: 0, ty: 0 };
+        window.addEventListener('mousemove', (e) => {
+          mouse.tx = (e.clientX / window.innerWidth - 0.5) * 4;
+          mouse.ty = (e.clientY / window.innerHeight - 0.5) * 4;
+        });
+
+        window.addEventListener('resize', () => {
+          camera.aspect = window.innerWidth / window.innerHeight;
+          camera.updateProjectionMatrix();
+          renderer.setSize(window.innerWidth, window.innerHeight);
         });
 
         const clock = new THREE.Clock();
-        (function loop() {
+
+        function animate() {
           const t = clock.getElapsedTime();
-          mouse.x += (mouse.tx - mouse.x)*0.04;
-          mouse.y += (mouse.ty - mouse.y)*0.04;
-          objects.forEach(o => {
-            o.rotation.x += o.userData.rx;
-            o.rotation.y += o.userData.ry;
-            o.rotation.z += o.userData.rz;
-            o.position.y += Math.sin(t + o.userData.fy)*0.003*o.userData.amp;
-          });
-          group.rotation.y = mouse.x*0.25;
-          group.rotation.x = mouse.y*0.18;
-          points.rotation.y = t*0.02;
+          
+          mouse.x += (mouse.tx - mouse.x) * 0.05;
+          mouse.y += (mouse.ty - mouse.y) * 0.05;
+
+          sphere.rotation.y = t * 0.05 + mouse.x * 0.05;
+          sphere.rotation.x = mouse.y * 0.05;
+          
+          ring.rotation.z = -t * 0.1;
+          ring.rotation.y = Math.sin(t * 0.2) * 0.2;
+
+          // Pulse attenuation
+          if (pulseAmplitude > 0.05) {
+            pulseAmplitude -= 0.02;
+          } else {
+            pulseAmplitude = 0.05;
+          }
+
+          // Dynamic wave deformation of sphere particles
+          const posAttr = geometry.attributes.position;
+          const amp = isVoiceSpeaking ? 0.4 + Math.sin(t * 12) * 0.15 : pulseAmplitude;
+          
+          for (let i = 0; i < particleCount; i++) {
+            const orig = originalPositions[i];
+            
+            // Simple noise using sine/cosine relative to position
+            const wave = Math.sin(orig.x * 2.0 + t * 4.0) * Math.cos(orig.y * 2.0 + t * 4.0) * amp;
+            const newPos = orig.clone().normalize().multiplyScalar(radius + wave);
+
+            posAttr.setXYZ(i, newPos.x, newPos.y, newPos.z);
+          }
+          posAttr.needsUpdate = true;
+
           renderer.render(scene, camera);
-          requestAnimationFrame(loop);
-        })();
+          requestAnimationFrame(animate);
+        }
+        animate();
       })();
     </script>
-
 </body>
+
 </html>

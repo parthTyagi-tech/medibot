@@ -22,10 +22,7 @@ from livekit.agents import (
     cli,
     get_job_context,
 )
-from livekit.agents import llm
-from livekit.agents.voice import room_io
-from livekit.agents.voice.agent import ModelSettings
-from livekit.agents.voice.turn import TurnHandlingOptions
+from livekit.agents import llm, room_io, ModelSettings, TurnHandlingOptions
 from livekit.plugins import deepgram, groq, silero
 
 load_dotenv()
@@ -155,6 +152,30 @@ class MedicalAgent(Agent):
                 "Please make sure the Flask app is running on port 5050."
             )
 
+    async def stream_backend(self, message: str, user_id: str | None = None):
+        try:
+            async with aiohttp.ClientSession() as http:
+                payload = {"message": message, "stream": True}
+                if user_id:
+                    payload["user_id"] = user_id
+                async with http.post(
+                    f"{BACKEND_URL}/voice_chat",
+                    json=payload,
+                    timeout=aiohttp.ClientTimeout(total=90),
+                ) as resp:
+                    if resp.status != 200:
+                        text = await resp.text()
+                        print(f"Backend HTTP {resp.status}: {text[:200]}")
+                        yield "Sorry, the medical backend returned an error."
+                        return
+
+                    async for chunk, _ in resp.content.iter_chunks():
+                        if chunk:
+                            yield chunk.decode("utf-8")
+        except Exception as e:
+            print(f"Backend stream error: {e}")
+            yield "Sorry, I couldn't reach the medical backend."
+
     async def send_text_to_room(
         self,
         text: str,
@@ -225,11 +246,15 @@ class MedicalAgent(Agent):
             print("WARNING: empty user_text in llm_node")
             return
 
-        bot_response = await self.ask_backend(user_text, user_id=self._user_id())
-        print(f"BOT REPLY: {bot_response[:120]}...")
+        print(f"Streaming voice reply for: '{user_text}'")
+        full_reply = []
+        async for chunk in self.stream_backend(user_text, user_id=self._user_id()):
+            yield chunk
+            full_reply.append(chunk)
 
+        bot_response = "".join(full_reply)
+        print(f"BOT REPLY (full): {bot_response[:120]}...")
         await self.send_text_to_room(bot_response, role="assistant")
-        yield bot_response
 
 
 async def entrypoint(ctx: JobContext):

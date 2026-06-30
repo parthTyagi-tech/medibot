@@ -47,8 +47,6 @@ class User(UserMixin, db.Model):
         backref='user',
         lazy=True
     )
-    memory = db.Column(db.Text, default="")
-    sessions = db.relationship('ChatSession', backref='user', lazy=True)
     
 class ChatSession(db.Model):
     id = db.Column(db.Integer, primary_key=True)

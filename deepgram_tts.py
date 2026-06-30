@@ -1,3 +1,6 @@
+import uuid
+import glob
+import time
 from deepgram import DeepgramClient
 from dotenv import load_dotenv
 import os
@@ -9,8 +12,18 @@ deepgram = DeepgramClient(
 )
 
 def text_to_speech(text):
+    os.makedirs("static/audio", exist_ok=True)
 
-    filename = "static/output.mp3"
+    # Clean up audio files older than 5 minutes to prevent disk bloat
+    now = time.time()
+    for f in glob.glob("static/audio/*.mp3"):
+        if os.stat(f).st_mtime < now - 300:
+            try:
+                os.remove(f)
+            except OSError:
+                pass
+
+    filename = f"static/audio/{uuid.uuid4()}.mp3"
 
     audio_generator = deepgram.speak.v1.audio.generate(
         text=text,

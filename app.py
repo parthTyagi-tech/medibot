@@ -16,7 +16,9 @@ from flask import (
     redirect,
     url_for,
     jsonify,
-    session
+    session,
+    Response,
+    stream_with_context
 )
 
 from flask_mail import Mail, Message as MailMessage
@@ -72,7 +74,7 @@ app.config["MAIL_SERVER"]        = "smtp.gmail.com"
 app.config["MAIL_PORT"]          = 587
 app.config["MAIL_USE_TLS"]       = True
 app.config["MAIL_USERNAME"]      = "parthtyagi3389@gmail.com"
-app.config["MAIL_PASSWORD"]      = "ajbb ekwo anvz kdwg"
+app.config["MAIL_PASSWORD"]      = os.getenv("MAIL_PASSWORD", "ajbb ekwo anvz kdwg")
 app.config["MAIL_DEFAULT_SENDER"] = "parthtyagi3389@gmail.com"
 
 mail = Mail(app)
@@ -86,6 +88,8 @@ app.config["SQLALCHEMY_DATABASE_URI"]        = "sqlite:///users.db"
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
 db.init_app(app)
+with app.app_context():
+    db.create_all()
 login_manager.init_app(app)
 login_manager.login_view = "login"
 
@@ -115,6 +119,12 @@ chatModel = ChatGroq(
     temperature=0.3
 )
 
+classifierModel = ChatGroq(
+    model="llama-3.1-8b-instant",
+    groq_api_key=os.getenv("GROQ_API_KEY"),
+    temperature=0.0
+)
+
 
 # ─────────────────────────────────────────────────────────────
 # Prompt Builder
@@ -127,13 +137,15 @@ def build_prompt(history_text, user_memory, user=None):
     user_name  = user.name if user else "User"
     first_name = user_name.split()[0] if user_name else "User"
 
+    history_part = f"Conversation so far:\n{history_text}\n" if history_text else ""
+
     system_prompt = (
         f"You are MediAssist, a friendly and knowledgeable "
         f"medical assistant — like a doctor friend who gives "
         f"clear, direct answers without unnecessary formality.\n\n"
         f"The user's name is {first_name}. "
         f"Use their name occasionally, not in every message.\n\n"
-        ("Conversation so far:\n" + history_text + "\n") if history_text else ""
+        f"{history_part}"
         f"Rules:\n"
         f"- Be natural and conversational.\n"
         f"- Never repeat or summarize what the user just said.\n"
@@ -222,8 +234,34 @@ def update_session_title(chat_session, first_message):
             chat_session.title = title if title else first_message[:50]
         except Exception:
             chat_session.title = first_message[:50]
-        db.session.commit()
-    
+
+
+def update_memory_in_background(app_instance, user_id, latest_message, history_text):
+    with app_instance.app_context():
+        from research.src.auth import User, db
+        try:
+            user = User.query.get(user_id)
+            if user:
+                update_user_memory(user, chatModel, latest_message, history_text)
+                db.session.commit()
+                print(f"[BG Memory Update] Completed for user {user_id}")
+        except Exception as e:
+            db.session.rollback()
+            print(f"[BG Memory Update] Conflict or error: {e}")
+
+
+def update_title_in_background(app_instance, session_id, first_message):
+    with app_instance.app_context():
+        from research.src.auth import ChatSession, db
+        try:
+            chat_session = ChatSession.query.get(session_id)
+            if chat_session and chat_session.title == "New Consultation":
+                update_session_title(chat_session, first_message)
+                db.session.commit()
+                print(f"[BG Title Update] Completed for session {session_id}")
+        except Exception as e:
+            db.session.rollback()
+            print(f"[BG Title Update] Conflict or error: {e}")
 
 
 def summarize_session(chat_session):
@@ -340,7 +378,12 @@ def index():
         user_id=current_user.id
     ).order_by(ChatSession.updated_at.desc()).limit(10).all()
 
-    return render_template("chat.html", user=current_user, past_sessions=past_sessions)
+    return render_template(
+        "chat.html",
+        user=current_user,
+        past_sessions=past_sessions,
+        active_session_id=session.get("chat_session_id")
+    )
 
 
 @app.route("/login", methods=["GET", "POST"])
@@ -371,6 +414,13 @@ def signup():
     if request.method == "POST":
         email    = request.form["email"]
         password = request.form["password"]
+        confirm_password = request.form.get("confirm_password")
+
+        if password != confirm_password:
+            return render_template("signup.html", error="Passwords do not match.")
+
+        if len(password) < 8:
+            return render_template("signup.html", error="Password must be at least 8 characters long.")
 
         if User.query.filter_by(email=email).first():
             return render_template("signup.html", error="Email already exists")
@@ -575,9 +625,11 @@ def google_auth():
         login_user(user)
         return redirect(url_for("index"))
 
-    except Exception:
+    except Exception as e:
+        with open("error.log", "a") as f:
+            traceback.print_exc(file=f)
         traceback.print_exc()
-        return "Something went wrong during login.", 500
+        return f"Something went wrong during login: {e}", 500
 
 
 @app.route("/logout")
@@ -642,7 +694,7 @@ def chat():
     if not msg:
         return "Please enter a message."
 
-    intent = classify_intent(chatModel, msg)
+    intent = classify_intent(classifierModel, msg)
     print("=" * 50)
     print("USER:", msg)
     print("INTENT:", intent)
@@ -655,14 +707,24 @@ def chat():
         db.session.add(user_msg)
         db.session.commit()
 
-        if intent in ["medical_query", "memory_recall"]:
-            update_user_memory(current_user, chatModel, msg) 
-            db.session.commit()
-
-        update_session_title(chat_session, msg)
-
         history_text  = build_history_text(chat_session)
         user_memory   = get_user_memory(current_user)
+
+        # Trigger background memory update asynchronously (context-aware)
+        threading.Thread(
+            target=update_memory_in_background,
+            args=(app, current_user.id, msg, history_text),
+            daemon=True
+        ).start()
+
+        # Trigger background title update asynchronously
+        if chat_session.title == "New Consultation":
+            threading.Thread(
+                target=update_title_in_background,
+                args=(app, chat_session.id, msg),
+                daemon=True
+            ).start()
+
         dynamic_prompt = build_prompt(history_text, user_memory)
 
         if intent == "medical_query":
@@ -720,12 +782,32 @@ def delete_session(session_id):
     return jsonify({"success": True})
 
 
+@app.route("/get_memory", methods=["GET"])
+@login_required
+def get_user_memory_route():
+    from research.src.memory import get_user_memory
+    return jsonify({"memory": get_user_memory(current_user)})
+
+
+@app.route("/clear_memory", methods=["POST"])
+@login_required
+def clear_user_memory_route():
+    from research.src.memory import clear_user_memory
+    try:
+        clear_user_memory(current_user)
+        db.session.commit()
+        return jsonify({"status": "ok"})
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
 @app.route("/tts", methods=["POST"])
 @login_required
 def tts():
     text = request.form.get("text", "")
-    text_to_speech(text)
-    return jsonify({"audio_url": "/static/output.mp3"})
+    filename = text_to_speech(text)
+    return jsonify({"audio_url": f"/{filename}"})
 
 
 # ─────────────────────────────────────────────────────────────
@@ -738,24 +820,119 @@ def voice_chat():
     data = request.get_json(silent=True) or {}
     msg  = data.get("message", "").strip()
     user_id = data.get("user_id")
+    stream = data.get("stream", False)
 
     if not msg:
+        if stream:
+            return Response("No message received", mimetype="text/plain")
         return jsonify({"response": "No message received"})
 
-    try:
-        if user_id:
+    # Fetch user if user_id is provided
+    user = None
+    if user_id:
+        try:
             user = User.query.get(int(user_id))
+        except Exception:
+            pass
+
+    if not stream:
+        # non-streaming path
+        try:
             if user:
                 answer = generate_voice_response(msg, user=user)
             else:
                 answer = generate_voice_response(msg)
-        else:
-            answer = generate_voice_response(msg)
-    except Exception:
-        traceback.print_exc()
-        answer = "Sorry, something went wrong on my end."
+        except Exception:
+            traceback.print_exc()
+            answer = "Sorry, something went wrong on my end."
+        return jsonify({"response": answer})
 
-    return jsonify({"response": answer})
+    # Streaming path
+    def g():
+        try:
+            # 1. Fast Intent Classification
+            intent = classify_intent(classifierModel, msg)
+            print("=" * 50)
+            print("VOICE USER:", msg)
+            print("VOICE INTENT:", intent)
+            print("=" * 50)
+
+            # 2. Get active session and save user message if user is authenticated
+            chat_session = None
+            if user:
+                chat_session = get_active_session_for_user(user.id)
+                user_msg = Message(session_id=chat_session.id, role="user", content=msg)
+                db.session.add(user_msg)
+                db.session.commit()
+
+                # Trigger background memory update asynchronously
+                threading.Thread(
+                    target=update_memory_in_background,
+                    args=(app, user.id, msg, build_history_text(chat_session)),
+                    daemon=True
+                ).start()
+
+                # Trigger background title update asynchronously
+                if chat_session.title == "New Consultation":
+                    threading.Thread(
+                        target=update_title_in_background,
+                        args=(app, chat_session.id, msg),
+                        daemon=True
+                    ).start()
+
+            # 3. Setup prompt
+            history_text = build_history_text(chat_session) if chat_session else ""
+            user_memory = get_user_memory(user) if user else "Voice Session"
+            dynamic_prompt = build_prompt(history_text, user_memory, user=user)
+
+            # 4. Stream response from LLM
+            full_response = []
+            if intent == "medical_query":
+                # Retrieve documents from Pinecone
+                docs = retriever.invoke(msg)
+                context = "\n\n".join([doc.page_content for doc in docs])
+                formatted_prompt = dynamic_prompt.format(context=context, input=msg)
+                
+                for chunk in chatModel.stream(formatted_prompt):
+                    text = chunk.content
+                    if text:
+                        yield text
+                        full_response.append(text)
+            else:
+                if intent == "memory_recall":
+                    prompt_val = f"User Memory:\n{user_memory}\n\nConversation History:\n{history_text}\n\nUser:\n{msg}"
+                elif intent == "greeting":
+                    prompt_val = f"Reply naturally to: {msg}"
+                elif intent == "account_action":
+                    prompt_val = "Please use the account controls available in the application."
+                    yield prompt_val
+                    full_response.append(prompt_val)
+                    prompt_val = None
+                elif intent == "general_chat":
+                    prompt_val = f"Conversation History:\n{history_text}\n\nUser:\n{msg}"
+                else:
+                    prompt_val = msg
+
+                if prompt_val:
+                    for chunk in chatModel.stream(prompt_val):
+                        text = chunk.content
+                        if text:
+                            yield text
+                            full_response.append(text)
+
+            # 5. Save assistant response to DB
+            if chat_session and full_response:
+                bot_answer = "".join(full_response)
+                bot_msg = Message(session_id=chat_session.id, role="assistant", content=bot_answer)
+                db.session.add(bot_msg)
+                chat_session.updated_at = datetime.now(timezone.utc)
+                db.session.commit()
+
+        except Exception as e:
+            traceback.print_exc()
+            yield "Sorry, something went wrong on my end."
+
+    return Response(stream_with_context(g()), mimetype="text/plain")
 
 
 @app.route("/livekit_token", methods=["GET"])
@@ -782,7 +959,6 @@ def livekit_token_route():
         )
 
         livekit_url = os.getenv("LIVEKIT_URL", "wss://localhost:7880")
-        livekit_url = os.getenv("LIVEKIT_URL", "wss://localhost:5050")
 
         return jsonify({
             "token":   token,

@@ -9,9 +9,9 @@ def get_user_memory(user):
     return user.memory or ""
 
 
-def update_user_memory(user, chatModel, latest_message):
+def update_user_memory(user, chatModel, latest_message, history_text=None):
     """
-    Update long-term user memory using the latest message.
+    Update long-term user memory using the latest message and recent history for context.
     """
 
     if not user or not latest_message:
@@ -19,13 +19,17 @@ def update_user_memory(user, chatModel, latest_message):
 
     current_memory = user.memory or ""
 
+    context_str = ""
+    if history_text:
+        context_str = f"Recent Conversation Context:\n{history_text}\n\n"
+
     memory_prompt = f"""
 You are a medical memory manager.
 
 Current User Memory:
 {current_memory}
 
-Latest User Message:
+{context_str}Latest User Message:
 {latest_message}
 
 Your job is to update the user's MEDICAL long-term memory ONLY.
