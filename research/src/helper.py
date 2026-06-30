@@ -10,52 +10,65 @@ import time
 class LocalEmbeddings:
 
     def __init__(self):
-        self.api_url = "https://api-inference.huggingface.co/models/sentence-transformers/all-MiniLM-L6-v2"
+        # We define a primary and secondary fallback endpoint for DNS resilience
+        self.api_urls = [
+            "https://api-inference.huggingface.co/models/sentence-transformers/all-MiniLM-L6-v2",
+            "https://api.huggingface.co/models/sentence-transformers/all-MiniLM-L6-v2",
+            "https://api-inference.huggingface.co/pipeline/feature-extraction/sentence-transformers/all-MiniLM-L6-v2"
+        ]
         self.headers = {}
         token = os.getenv("HF_TOKEN")
         if token:
             self.headers["Authorization"] = f"Bearer {token}"
 
     def _query(self, texts: List[str]) -> List[List[float]]:
-        try:
-            response = requests.post(
-                self.api_url,
-                headers=self.headers,
-                json={"inputs": texts, "options": {"wait_for_model": True}},
-                timeout=15
-            )
-            res_json = response.json()
-            
-            # If the model is currently loading, retry once after waiting
-            if isinstance(res_json, dict) and "estimated_time" in res_json:
-                wait_time = min(float(res_json["estimated_time"]), 10.0)
-                time.sleep(wait_time)
+        last_err = None
+        for api_url in self.api_urls:
+            try:
                 response = requests.post(
-                    self.api_url,
+                    api_url,
                     headers=self.headers,
                     json={"inputs": texts, "options": {"wait_for_model": True}},
-                    timeout=15
+                    timeout=12
                 )
                 res_json = response.json()
-            
-            if isinstance(res_json, list):
-                # Handle sequence token embedding outputs [batch, seq, dim] -> mean pooling
-                if len(res_json) > 0 and isinstance(res_json[0], list):
-                    if isinstance(res_json[0][0], list):
-                        pooled = []
-                        for doc_emb in res_json:
-                            seq_len = len(doc_emb)
-                            dim = len(doc_emb[0])
-                            mean_vector = [sum(doc_emb[t][d] for t in range(seq_len)) / seq_len for d in range(dim)]
-                            pooled.append(mean_vector)
-                        return pooled
-                    else:
-                        return res_json
-            raise ValueError(f"Unexpected response format from Hugging Face: {res_json}")
-        except Exception as e:
-            # Fallback output for sandbox or network failures
-            print("HF Embedding Error:", e)
-            return [[0.0] * 384 for _ in texts]
+                
+                # If the model is currently loading, retry once after waiting
+                if isinstance(res_json, dict) and "estimated_time" in res_json:
+                    wait_time = min(float(res_json["estimated_time"]), 10.0)
+                    time.sleep(wait_time)
+                    response = requests.post(
+                        api_url,
+                        headers=self.headers,
+                        json={"inputs": texts, "options": {"wait_for_model": True}},
+                        timeout=12
+                    )
+                    res_json = response.json()
+                
+                if isinstance(res_json, list):
+                    # Handle sequence token embedding outputs [batch, seq, dim] -> mean pooling
+                    if len(res_json) > 0 and isinstance(res_json[0], list):
+                        if isinstance(res_json[0][0], list):
+                            pooled = []
+                            for doc_emb in res_json:
+                                seq_len = len(doc_emb)
+                                dim = len(doc_emb[0])
+                                mean_vector = [sum(doc_emb[t][d] for t in range(seq_len)) / seq_len for d in range(dim)]
+                                pooled.append(mean_vector)
+                            return pooled
+                        else:
+                            return res_json
+                if isinstance(res_json, dict) and "error" in res_json:
+                    raise ValueError(res_json["error"])
+                raise ValueError(f"Unexpected response format from Hugging Face: {res_json}")
+            except Exception as e:
+                last_err = e
+                print(f"HF query failed for {api_url}: {e}")
+                continue
+                
+        # If all fail, let's output a fallback log and return dummy vectors to prevent crashes
+        print("HF Embedding Error (all endpoints failed):", last_err)
+        return [[0.0] * 384 for _ in texts]
 
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
         embeddings = []
