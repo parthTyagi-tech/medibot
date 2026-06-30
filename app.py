@@ -57,7 +57,10 @@ from research.src.memory import (
 )
 from research.src.helper import download_embeddings
 
-from langchain_pinecone import PineconeVectorStore
+from pinecone import Pinecone
+from langchain_core.retrievers import BaseRetriever
+from langchain_core.documents import Document
+from typing import Any
 from langchain_groq import ChatGroq
 from langchain.chains import create_retrieval_chain
 from langchain.chains.combine_documents import create_stuff_documents_chain
@@ -103,14 +106,32 @@ app.register_blueprint(google_bp, url_prefix="/login")
 
 embedding = download_embeddings()
 
-docsearch = PineconeVectorStore.from_existing_index(
-    index_name="medical-chatbot",
-    embedding=embedding
-)
+class CustomPineconeRetriever(BaseRetriever):
+    index: Any
+    embeddings: Any
+    k: int = 3
 
-retriever = docsearch.as_retriever(
-    search_type="similarity",
-    search_kwargs={"k": 3}
+    def _get_relevant_documents(self, query: str, *, run_manager=None):
+        try:
+            query_vector = self.embeddings.embed_query(query)
+            results = self.index.query(vector=query_vector, top_k=self.k, include_metadata=True)
+            docs = []
+            for match in results.get("matches", []):
+                metadata = match.get("metadata", {})
+                text = metadata.get("text", "")
+                docs.append(Document(page_content=text, metadata=metadata))
+            return docs
+        except Exception as e:
+            print("Pinecone Retrieval Error:", e)
+            return []
+
+pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
+pinecone_index = pc.Index("medical-chatbot")
+
+retriever = CustomPineconeRetriever(
+    index=pinecone_index,
+    embeddings=embedding,
+    k=3
 )
 
 chatModel = ChatGroq(

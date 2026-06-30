@@ -29,13 +29,34 @@ print(f"Number of chunks: {len(text_chunk)}")
 # Embeddings
 embedding = download_embeddings()
 
-# Import Pinecone Vector Store
-from langchain_pinecone import PineconeVectorStore
+# Import native Pinecone client
+from pinecone import Pinecone
 
-print("Upserting chunks to Pinecone...")
-docsearch = PineconeVectorStore.from_documents(
-    documents=text_chunk,
-    embedding=embedding,
-    index_name="medical-chatbot"
-)
+print("Upserting chunks to Pinecone using native client...")
+pc = Pinecone(api_key=PINECONE_API_KEY)
+index = pc.Index("medical-chatbot")
+
+vectors = []
+for i, chunk in enumerate(text_chunk):
+    text = chunk.page_content
+    # Generate embedding query vector
+    vector = embedding.embed_query(text)
+    
+    metadata = chunk.metadata.copy()
+    metadata["text"] = text  # Critical: Store text in metadata so CustomPineconeRetriever can read it
+    
+    vectors.append({
+        "id": f"chunk-{i}",
+        "values": vector,
+        "metadata": metadata
+    })
+    
+    # Batch upsert in sizes of 100
+    if len(vectors) >= 100:
+        index.upsert(vectors=vectors)
+        vectors = []
+
+if vectors:
+    index.upsert(vectors=vectors)
+
 print("Index successfully stored in Pinecone.")

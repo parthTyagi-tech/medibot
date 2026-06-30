@@ -23,8 +23,5 @@ langchain==0.3.26
 langchain-community==0.3.26
 langchain-core==0.3.68
 langchain-groq==0.3.2
-langchain-pinecone==0.2.13
 
 pinecone==7.3.0
-openai>=1.86.0,<2.0.0
-
