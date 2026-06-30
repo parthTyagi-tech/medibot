@@ -85,7 +85,10 @@ mail = Mail(app)
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 
 app.secret_key = os.getenv("SECRET_KEY", "fallback-secret")
-app.config["SERVER_NAME"] = "localhost:5050" 
+# Only set SERVER_NAME if explicitly provided (e.g. for local testing).
+# Leave unset on Render to allow the container to bind to the Render domain automatically.
+if os.getenv("SERVER_NAME"):
+    app.config["SERVER_NAME"] = os.getenv("SERVER_NAME")
 
 app.config["SQLALCHEMY_DATABASE_URI"]        = "sqlite:///users.db"
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False

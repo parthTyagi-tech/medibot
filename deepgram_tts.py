@@ -7,11 +7,15 @@ import os
 
 load_dotenv()
 
-deepgram = DeepgramClient(
-    api_key=os.getenv("DEEPGRAM_API_KEY")
-)
+deepgram = None
 
 def text_to_speech(text):
+    global deepgram
+    if deepgram is None:
+        api_key = os.getenv("DEEPGRAM_API_KEY")
+        if not api_key:
+            raise ValueError("DEEPGRAM_API_KEY environment variable is missing")
+        deepgram = DeepgramClient(api_key=api_key)
     os.makedirs("static/audio", exist_ok=True)
 
     # Clean up audio files older than 5 minutes to prevent disk bloat
