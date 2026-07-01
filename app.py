@@ -1133,4 +1133,13 @@ def debug_oauth():
 # ─────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
+    # Start local LiveKit worker in dev mode
+    import subprocess
+    import sys
+    print("Local startup: Launching LiveKit agent worker in background...")
+    try:
+        subprocess.Popen([sys.executable, "voice_worker.py", "dev"])
+    except Exception as e:
+        print(f"Failed to start local voice worker: {e}")
+
     app.run(host="localhost", port=5050, debug=True)
