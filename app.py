@@ -1097,7 +1097,7 @@ def dispatch_agent():
                     result["reused"]      = False
                     print(
                         f"[dispatch_agent] Dispatched 'medical-agent' "
-                        f"to room '{room_name}' → id={dispatch.id}"
+                        f"to room '{room_name}' -> id={dispatch.id}"
                     )
 
             except Exception as exc:
