@@ -611,8 +611,12 @@
 
             try {
                 const res  = await fetch("/livekit_token");
+                if (!res.ok) {
+                    const text = await res.text();
+                    throw new Error(text.includes("<!DOCTYPE") ? "Authentication session expired. Please sign in again." : (text || `HTTP error ${res.status}`));
+                }
                 const data = await res.json();
-                if (!res.ok || !data.token) { throw new Error(data.error || "No token from server"); }
+                if (!data.token) { throw new Error(data.error || "No token from server"); }
 
                 livekitRoom = new LivekitClient.Room({
                     adaptiveStream: true,
@@ -643,6 +647,10 @@
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ room: data.room }),
                 });
+                if (!dispatchRes.ok) {
+                    const text = await dispatchRes.text();
+                    throw new Error(text.includes("<!DOCTYPE") ? "Authentication session expired. Please sign in again." : (text || `HTTP error ${dispatchRes.status}`));
+                }
                 const dispatchData = await dispatchRes.json();
                 if (dispatchData.status !== "ok") { throw new Error(dispatchData.message || "Failed to launch voice worker"); }
 

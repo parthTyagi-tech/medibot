@@ -1136,9 +1136,21 @@ if __name__ == "__main__":
     # Start local LiveKit worker in dev mode
     import subprocess
     import sys
+    import atexit
     print("Local startup: Launching LiveKit agent worker in background...")
     try:
-        subprocess.Popen([sys.executable, "voice_worker.py", "dev"])
+        proc = subprocess.Popen([sys.executable, "voice_worker.py", "dev"])
+        @atexit.register
+        def cleanup_worker():
+            print("Local shutdown: Terminating LiveKit agent worker...")
+            try:
+                proc.terminate()
+                proc.wait(timeout=3)
+            except Exception:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
     except Exception as e:
         print(f"Failed to start local voice worker: {e}")
 
