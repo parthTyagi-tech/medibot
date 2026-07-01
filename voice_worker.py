@@ -38,6 +38,65 @@ _REQUIRED_ENV = (
     "GROQ_API_KEY",
 )
 
+LANGUAGE_CONFIGS = {
+    "en": {
+        "stt_lang": "en-US",
+        "stt_model": "nova-3",
+        "tts_model": "aura-2-thalia-en",
+        "system_instruction": "You are MediAssist, a medical assistant. Keep answers concise — they will be spoken aloud. Answer in English.",
+        "greeting": "Hello, I am MediAssist. How can I help you today?",
+    },
+    "es": {
+        "stt_lang": "es",
+        "stt_model": "nova-2",
+        "tts_model": "aura-talia-es",
+        "system_instruction": "Eres MediAssist, un asistente médico. Mantén las respuestas concisas: se leerán en voz alta. Responde en español.",
+        "greeting": "Hola, soy MediAssist. ¿Cómo puedo ayudarte hoy?",
+    },
+    "fr": {
+        "stt_lang": "fr",
+        "stt_model": "nova-2",
+        "tts_model": "aura-talia-fr",
+        "system_instruction": "Vous êtes MediAssist, un assistant médical. Restez concis, les réponses seront lues à haute voix. Répondez en français.",
+        "greeting": "Bonjour, je suis MediAssist. Comment puis-je vous aider aujourd'hui?",
+    },
+    "de": {
+        "stt_lang": "de",
+        "stt_model": "nova-2",
+        "tts_model": "aura-talia-de",
+        "system_instruction": "Sie sind MediAssist, ein medizinischer Assistent. Fassen Sie sich kurz – die Antworten werden laut vorgelesen. Antworten Sie auf Deutsch.",
+        "greeting": "Hallo, ich bin MediAssist. Wie kann ich Ihnen heute helfen?",
+    },
+    "it": {
+        "stt_lang": "it",
+        "stt_model": "nova-2",
+        "tts_model": "aura-talia-it",
+        "system_instruction": "Sei MediAssist, un assistente medico. Mantieni le risposte concise: verranno lette ad alta voce. Rispondi in italiano.",
+        "greeting": "Ciao, sono MediAssist. Come posso aiutarti oggi?",
+    },
+    "pt": {
+        "stt_lang": "pt",
+        "stt_model": "nova-2",
+        "tts_model": "aura-talia-pt",
+        "system_instruction": "Você é o MediAssist, um assistente médico. Seja conciso — as respostas serão lidas em voz alta. Resposta em português.",
+        "greeting": "Olá, eu sou o MediAssist. Como posso ajudar você hoje?",
+    },
+    "hi": {
+        "stt_lang": "hi",
+        "stt_model": "nova-2",
+        "tts_model": "aura-talia-hi",
+        "system_instruction": "आप MediAssist हैं, एक चिकित्सा सहायक। अपने उत्तरों को संक्षिप्त रखें - उन्हें जोर से बोला जाएगा। हिंदी में उत्तर दें।",
+        "greeting": "नमस्ते, मैं MediAssist हूँ। आज मैं आपकी क्या मदद कर सकता हूँ?",
+    },
+    "ja": {
+        "stt_lang": "ja",
+        "stt_model": "nova-2",
+        "tts_model": "aura-talia-ja",
+        "system_instruction": "あなたは医療アシスタントのMediAssistです。回答は簡潔にしてください。音声で読み上げられます。日本語で回答してください。",
+        "greeting": "こんにちは、MediAssistです。本日はどのようなご用件でしょうか？",
+    }
+}
+
 
 def _validate_env() -> None:
     missing = [name for name in _REQUIRED_ENV if not os.getenv(name, "").strip()]
@@ -105,13 +164,9 @@ logging.getLogger("livekit.plugins.deepgram").setLevel(logging.INFO)
 
 class MedicalAgent(Agent):
 
-    def __init__(self):
-        super().__init__(
-            instructions=(
-                "You are MediAssist, a medical assistant. "
-                "Keep answers concise — they will be spoken aloud."
-            )
-        )
+    def __init__(self, instructions: str, greeting: str):
+        super().__init__(instructions=instructions)
+        self.greeting = greeting
         self._user_identity: str | None = None
 
     def _room(self) -> rtc.Room:
@@ -217,9 +272,8 @@ class MedicalAgent(Agent):
 
     async def on_session_start(self) -> None:
         print("SESSION STARTED")
-        greeting = "Hello, I am MediAssist. How can I help you today?"
-        await self.send_text_to_room(greeting, role="assistant")
-        await self.session.say(greeting, allow_interruptions=True)
+        await self.send_text_to_room(self.greeting, role="assistant")
+        await self.session.say(self.greeting, allow_interruptions=True)
 
     async def on_user_turn_completed(
         self,
@@ -273,11 +327,19 @@ async def entrypoint(ctx: JobContext):
         print("Loading VAD in job (prewarm miss)...")
         vad = silero.VAD.load()
 
+    # Parse language from job metadata (default to 'en')
+    lang = (ctx.job.metadata or "en").strip().lower()
+    if lang not in LANGUAGE_CONFIGS:
+        lang = "en"
+    
+    config = LANGUAGE_CONFIGS[lang]
+    print(f"Configuring voice channel for language: {lang}")
+
     session = AgentSession(
-        stt=deepgram.STT(model="nova-3", language="en-US"),
+        stt=deepgram.STT(model=config["stt_model"], language=config["stt_lang"]),
         vad=vad,
         llm=groq.LLM(model="llama-3.3-70b-versatile"),
-        tts=deepgram.TTS(model="aura-2-thalia-en"),
+        tts=deepgram.TTS(model=config["tts_model"]),
         aec_warmup_duration=2.0,
         turn_handling=TurnHandlingOptions(
             endpointing={"min_delay": 0.5, "max_delay": 5.0},
@@ -295,7 +357,10 @@ async def entrypoint(ctx: JobContext):
 
     await session.start(
         room=ctx.room,
-        agent=MedicalAgent(),
+        agent=MedicalAgent(
+            instructions=config["system_instruction"],
+            greeting=config["greeting"]
+        ),
         record=False,
         room_options=room_io.RoomOptions(
             audio_input=room_io.AudioInputOptions(),

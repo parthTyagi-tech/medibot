@@ -1004,6 +1004,7 @@ def dispatch_agent():
 
     data      = request.get_json(silent=True) or {}
     room_name = data.get("room") or f"mediassist-voice-{current_user.id}-{int(time.time())}"
+    language  = data.get("language", "en").strip()
     user_id   = str(current_user.id)
 
     livekit_url        = os.getenv("LIVEKIT_URL",        "").strip()
@@ -1089,7 +1090,7 @@ def dispatch_agent():
                         CreateAgentDispatchRequest(
                             agent_name="medical-agent",
                             room=room_name,
-                            metadata=user_id,
+                            metadata=language,
                         )
                     )
                     result["status"]      = "ok"

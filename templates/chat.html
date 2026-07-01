@@ -76,6 +76,31 @@
       #voiceToast.show { opacity: 1; }
       
       .voice-label { font-size: 10px; font-weight: 700; text-transform: uppercase; color: var(--text-accent); margin-bottom: 4px; display: block; }
+      
+      .language-select {
+        appearance: none;
+        -webkit-appearance: none;
+        background-image: url("data:image/svg+xml;utf8,<svg fill='white' height='20' viewBox='0 0 24 24' width='20' xmlns='http://www.w3.org/2000/svg'><path d='M7 10l5 5 5-5z'/></svg>");
+        background-repeat: no-repeat;
+        background-position: right 10px center;
+        padding-right: 32px !important;
+        background-color: rgba(255,255,255,0.04);
+        border: 1px solid rgba(255,255,255,0.08);
+        color: #fff;
+        padding: 0 14px;
+        border-radius: 12px;
+        height: 42px;
+        font-size: 13.5px;
+        font-weight: 500;
+        cursor: pointer;
+        outline: none;
+        margin-right: 12px;
+        transition: all 0.3s ease;
+      }
+      .language-select:hover {
+        background-color: rgba(255,255,255,0.08) !important;
+        border-color: var(--text-accent) !important;
+      }
     </style>
 </head>
 
@@ -165,6 +190,18 @@
                 </div>
                 
                 <div class="header-actions">
+                    <!-- Language Selection Dropdown -->
+                    <select class="language-select" id="voiceLangSelect" title="Select Voice Language">
+                        <option value="en" style="background:#0f0f15; color:#fff;">🇺🇸 English</option>
+                        <option value="es" style="background:#0f0f15; color:#fff;">🇪🇸 Español</option>
+                        <option value="fr" style="background:#0f0f15; color:#fff;">🇫🇷 Français</option>
+                        <option value="de" style="background:#0f0f15; color:#fff;">🇩🇪 Deutsch</option>
+                        <option value="it" style="background:#0f0f15; color:#fff;">🇮🇹 Italiano</option>
+                        <option value="pt" style="background:#0f0f15; color:#fff;">🇵🇹 Português</option>
+                        <option value="hi" style="background:#0f0f15; color:#fff;">🇮🇳 हिन्दी</option>
+                        <option value="ja" style="background:#0f0f15; color:#fff;">🇯🇵 日本語</option>
+                    </select>
+
                     <!-- Premium Pill Mic Button -->
                     <button class="btn-glossy voice-btn" id="micBtn" onclick="toggleVoice()" title="Start / Stop Voice Chat">
                         <span class="voice-dot"></span>
@@ -642,10 +679,11 @@
 
                 showToast("🎙️ Starting MediAssist Agent...", 0);
 
+                const selectedLang = document.getElementById("voiceLangSelect").value;
                 const dispatchRes = await fetch("/dispatch_agent", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ room: data.room }),
+                    body: JSON.stringify({ room: data.room, language: selectedLang }),
                 });
                 if (!dispatchRes.ok) {
                     const text = await dispatchRes.text();
