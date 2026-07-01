@@ -27,7 +27,8 @@ from livekit.plugins import deepgram, groq, silero
 
 load_dotenv()
 
-BACKEND_URL = os.getenv("VOICE_BACKEND_URL", "http://127.0.0.1:5050").rstrip("/")
+_port = os.getenv("PORT", "5050").strip()
+BACKEND_URL = os.getenv("VOICE_BACKEND_URL", f"http://127.0.0.1:{_port}").rstrip("/")
 
 _REQUIRED_ENV = (
     "LIVEKIT_URL",
