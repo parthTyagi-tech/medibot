@@ -197,8 +197,7 @@
                         <option value="fr" style="background:#0f0f15; color:#fff;">🇫🇷 Français</option>
                         <option value="de" style="background:#0f0f15; color:#fff;">🇩🇪 Deutsch</option>
                         <option value="it" style="background:#0f0f15; color:#fff;">🇮🇹 Italiano</option>
-                        <option value="pt" style="background:#0f0f15; color:#fff;">🇵🇹 Português</option>
-                        <option value="hi" style="background:#0f0f15; color:#fff;">🇮🇳 हिन्दी</option>
+                        <option value="nl" style="background:#0f0f15; color:#fff;">🇳🇱 Nederlands</option>
                         <option value="ja" style="background:#0f0f15; color:#fff;">🇯🇵 日本語</option>
                     </select>
 
@@ -518,14 +517,19 @@
 
         function attachRemoteAudio(track) {
             if (!track || track.kind !== LivekitClient.Track.Kind.Audio) return;
-            const audioEl = document.getElementById("remoteAudio");
-            if (!audioEl) return;
-            try { track.attach(audioEl); } catch (e) { return; }
-            audioEl.muted = false;
-            audioEl.volume = 1.0;
-            const playPromise = audioEl.play();
-            if (playPromise && typeof playPromise.catch === "function") {
-                playPromise.catch(() => {});
+            
+            // Dynamically attach track to get a new HTMLAudioElement.
+            // This is the standard, most reliable way to play audio tracks in LiveKit SDK.
+            const audioEl = track.attach();
+            audioEl.autoplay = true;
+            audioEl.playsinline = true;
+            
+            // Append it to our audio-sink container
+            const sink = document.getElementById("audio-sink");
+            if (sink) {
+                sink.appendChild(audioEl);
+            } else {
+                document.body.appendChild(audioEl);
             }
         }
 
@@ -718,15 +722,16 @@
         async function stopVoice() {
             if (window.setVoiceSpeakingState) window.setVoiceSpeakingState(false);
             if (livekitRoom) {
-                const audioEl = document.getElementById("remoteAudio");
-                if (audioEl) {
-                    audioEl.pause();
-                    audioEl.srcObject = null;
-                    audioEl.src = "";
-                }
                 try { await livekitRoom.disconnect(); } catch (_) {}
                 livekitRoom = null;
             }
+            
+            // Clean up all dynamically attached audio elements
+            const sink = document.getElementById("audio-sink");
+            if (sink) {
+                sink.innerHTML = "";
+            }
+            
             voiceActive = false;
             const btn = document.getElementById("micBtn");
             btn.classList.remove("voice-active", "voice-connecting");
