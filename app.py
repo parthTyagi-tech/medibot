@@ -549,20 +549,15 @@ Best Regards,
 MediAssist Team
 Your AI Health Companion
 """
-        try:
-            mail.send(msg)
-            print("EMAIL SENT SUCCESSFULLY")
-        except Exception as e:
-            print("EMAIL ERROR:", e)
-            user.reset_otp = None
-            user.otp_expiry = None
-            db.session.commit()
-            return render_template(
-                "forgot_password.html",
-                error="Could not send OTP right now. Please check mail settings and try again.",
-                email=email,
-            )
-
+        def send_async_email(app, msg):
+            with app.app_context():
+                try:
+                    mail.send(msg)
+                    print("EMAIL SENT SUCCESSFULLY")
+                except Exception as e:
+                    print("EMAIL ERROR:", e)
+        
+        threading.Thread(target=send_async_email, args=(app, msg), daemon=True).start()
         session["reset_email"] = email
         session["reset_otp_verified"] = False
         return redirect(url_for("verify_otp", email=email))
