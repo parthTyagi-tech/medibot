@@ -81,6 +81,8 @@ app.config["MAIL_USERNAME"]      = "parthtyagi3389@gmail.com"
 app.config["MAIL_PASSWORD"]      = os.getenv("MAIL_PASSWORD", "ajbb ekwo anvz kdwg")
 app.config["MAIL_DEFAULT_SENDER"] = "parthtyagi3389@gmail.com"
 
+# Keep Mail initialized for backwards compatibility or remove if not used elsewhere, 
+# but we will use HTTP API in forgot_password.
 mail = Mail(app)
 
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
@@ -530,30 +532,20 @@ def forgot_password():
             sender="parthtyagi3389@gmail.com",
             recipients=[email]
         )
-        msg.body = f"""
-🩺 MediAssist Password Reset
+        msg.html = f"""
+        <div style="font-family: sans-serif; max-width: 500px; margin: 0 auto; color: #333;">
+            <h2 style="color: #2b5a8e;">🩺 MediAssist Password Reset</h2>
+            <p>Hello,</p>
+            <p>We received a request to reset the password associated with your MediAssist account.</p>
+            <div style="background-color: #f4f7f6; padding: 15px; text-align: center; font-size: 24px; font-weight: bold; letter-spacing: 2px; border-radius: 8px; margin: 20px 0;">
+                {otp}
+            </div>
+            <p>This code will expire in 10 minutes.</p>
+            <p style="font-size: 12px; color: #777;">If you did not request this reset, simply ignore this email.</p>
+            <p>Best Regards,<br>MediAssist Team</p>
+        </div>
+        """
 
-Hello,
-
-We received a request to reset the password associated with your MediAssist account.
-
-━━━━━━━━━━━━━━━━━━
-RESET OTP: {otp}
-━━━━━━━━━━━━━━━━━━
-
-This code will expire in 10 minutes.
-
-For your security:
-• Never share this OTP with anyone.
-• MediAssist will never ask for your OTP.
-• If you did not request this reset, simply ignore this email.
-
-Thank you for choosing MediAssist.
-
-Best Regards,
-MediAssist Team
-Your AI Health Companion
-"""
         def send_async_email(app, msg):
             with app.app_context():
                 try:
@@ -563,6 +555,7 @@ Your AI Health Companion
                     print("EMAIL ERROR:", e)
         
         threading.Thread(target=send_async_email, args=(app, msg), daemon=True).start()
+        
         session["reset_email"] = email
         session["reset_otp_verified"] = False
         return redirect(url_for("verify_otp", email=email))
