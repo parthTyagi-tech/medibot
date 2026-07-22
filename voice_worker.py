@@ -194,7 +194,7 @@ class MedicalAgent(Agent):
                 async with http.post(
                     f"{BACKEND_URL}/voice_chat",
                     json=payload,
-                    timeout=aiohttp.ClientTimeout(total=90),
+                    timeout=aiohttp.ClientTimeout(total=15),
                 ) as resp:
                     if resp.status != 200:
                         text = await resp.text()
@@ -208,8 +208,7 @@ class MedicalAgent(Agent):
         except Exception as e:
             print(f"Backend error: {e}")
             return (
-                "Sorry, I couldn't reach the medical backend. "
-                "Please make sure the Flask app is running on port 5050."
+                "Sorry, I couldn't reach the medical backend."
             )
 
     async def stream_backend(self, message: str, user_id: str | None = None):
@@ -221,7 +220,7 @@ class MedicalAgent(Agent):
                 async with http.post(
                     f"{BACKEND_URL}/voice_chat",
                     json=payload,
-                    timeout=aiohttp.ClientTimeout(total=90),
+                    timeout=aiohttp.ClientTimeout(total=15),
                 ) as resp:
                     if resp.status != 200:
                         text = await resp.text()
@@ -391,5 +390,6 @@ if __name__ == "__main__":
             prewarm_fnc=prewarm,
             agent_name="medical-agent",
             initialize_process_timeout=120.0,
+            num_initializing_processes=2,
         )
     )

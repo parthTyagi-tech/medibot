@@ -10,18 +10,23 @@ import time
 class LocalEmbeddings:
 
     def __init__(self):
-        # We define a primary and secondary fallback endpoint for DNS resilience
+        # Current valid Hugging Face Router & Inference API endpoints
         self.api_urls = [
+            "https://router.huggingface.co/hf-inference/models/sentence-transformers/all-MiniLM-L6-v2",
+            "https://api-inference.huggingface.co/pipeline/feature-extraction/sentence-transformers/all-MiniLM-L6-v2",
             "https://api-inference.huggingface.co/models/sentence-transformers/all-MiniLM-L6-v2",
-            "https://api.huggingface.co/models/sentence-transformers/all-MiniLM-L6-v2",
-            "https://api-inference.huggingface.co/pipeline/feature-extraction/sentence-transformers/all-MiniLM-L6-v2"
         ]
         self.headers = {}
         token = os.getenv("HF_TOKEN")
         if token:
             self.headers["Authorization"] = f"Bearer {token}"
+        self._cache = {}
 
     def _query(self, texts: List[str]) -> List[List[float]]:
+        # Check cache for single text queries
+        if len(texts) == 1 and texts[0] in self._cache:
+            return [self._cache[texts[0]]]
+
         last_err = None
         for api_url in self.api_urls:
             try:
@@ -29,19 +34,19 @@ class LocalEmbeddings:
                     api_url,
                     headers=self.headers,
                     json={"inputs": texts, "options": {"wait_for_model": True}},
-                    timeout=12
+                    timeout=3
                 )
                 res_json = response.json()
                 
-                # If the model is currently loading, retry once after waiting
+                # If the model is currently loading, retry once after a short wait
                 if isinstance(res_json, dict) and "estimated_time" in res_json:
-                    wait_time = min(float(res_json["estimated_time"]), 10.0)
+                    wait_time = min(float(res_json["estimated_time"]), 3.0)
                     time.sleep(wait_time)
                     response = requests.post(
                         api_url,
                         headers=self.headers,
                         json={"inputs": texts, "options": {"wait_for_model": True}},
-                        timeout=12
+                        timeout=3
                     )
                     res_json = response.json()
                 
@@ -55,9 +60,13 @@ class LocalEmbeddings:
                                 dim = len(doc_emb[0])
                                 mean_vector = [sum(doc_emb[t][d] for t in range(seq_len)) / seq_len for d in range(dim)]
                                 pooled.append(mean_vector)
-                            return pooled
+                            res_vecs = pooled
                         else:
-                            return res_json
+                            res_vecs = res_json
+
+                        if len(texts) == 1 and len(res_vecs) > 0:
+                            self._cache[texts[0]] = res_vecs[0]
+                        return res_vecs
                 if isinstance(res_json, dict) and "error" in res_json:
                     raise ValueError(res_json["error"])
                 raise ValueError(f"Unexpected response format from Hugging Face: {res_json}")
@@ -66,9 +75,12 @@ class LocalEmbeddings:
                 print(f"HF query failed for {api_url}: {e}")
                 continue
                 
-        # If all fail, let's output a fallback log and return dummy vectors to prevent crashes
+        # If all fail, return fallback zero vectors fast to prevent blocking backend
         print("HF Embedding Error (all endpoints failed):", last_err)
-        return [[0.0] * 384 for _ in texts]
+        dummy_vecs = [[0.0] * 384 for _ in texts]
+        if len(texts) == 1:
+            self._cache[texts[0]] = dummy_vecs[0]
+        return dummy_vecs
 
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
         embeddings = []
