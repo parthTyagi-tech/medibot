@@ -41,7 +41,7 @@ _REQUIRED_ENV = (
 LANGUAGE_CONFIGS = {
     "en": {
         "stt_lang": "en-US",
-        "stt_model": "nova-3",
+        "stt_model": "nova-2",
         "tts_model": "aura-2-thalia-en",
         "system_instruction": "You are MediAssist, a medical assistant. Keep answers concise — they will be spoken aloud. Answer in English.",
         "greeting": "Hello, I am MediAssist. How can I help you today?",
@@ -113,7 +113,11 @@ def _validate_env() -> None:
 
 
 def prewarm(proc: JobProcess) -> None:
-    proc.userdata["vad"] = silero.VAD.load()
+    proc.userdata["vad"] = silero.VAD.load(
+        min_speech_duration=0.05,
+        min_silence_duration=0.3,
+        prefix_padding_duration=0.2,
+    )
 
 
 def _install_room_stream_handlers(room: rtc.Room) -> None:
@@ -328,7 +332,11 @@ async def entrypoint(ctx: JobContext):
     vad = ctx.proc.userdata.get("vad")
     if vad is None:
         print("Loading VAD in job (prewarm miss)...")
-        vad = silero.VAD.load()
+        vad = silero.VAD.load(
+            min_speech_duration=0.05,
+            min_silence_duration=0.3,
+            prefix_padding_duration=0.2,
+        )
 
     # Parse language from job metadata (default to 'en')
     lang = (ctx.job.metadata or "en").strip().lower()

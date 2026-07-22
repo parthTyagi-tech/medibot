@@ -662,7 +662,7 @@
                 livekitRoom = new LivekitClient.Room({
                     adaptiveStream: true,
                     dynacast: true,
-                    audioCaptureDefaults: { autoGainControl: true, echoCancellation: true, noiseSuppression: true },
+                    audioCaptureDefaults: { autoGainControl: true, echoCancellation: true, noiseSuppression: false },
                 });
 
                 registerLiveKitStreamHandlers(livekitRoom);
