@@ -5,201 +5,49 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>MediAssist — Verify OTP</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
-  <style>
-    /* Specific timer and layout style overrides */
-    .timer-row {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      margin-bottom: 24px;
-      font-size: 13.5px;
-    }
-    .timer-display {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      color: var(--text-muted);
-    }
-    .timer-ring-wrap {
-      position: relative;
-      width: 36px;
-      height: 36px;
-      flex-shrink: 0;
-    }
-    .timer-ring-wrap svg {
-      transform: rotate(-90deg);
-    }
-    .timer-ring-bg {
-      fill: none;
-      stroke: rgba(255, 255, 255, 0.05);
-      stroke-width: 3;
-    }
-    .timer-ring-fg {
-      fill: none;
-      stroke: var(--text-accent);
-      stroke-width: 3;
-      stroke-linecap: round;
-      transition: stroke-dashoffset 1s linear;
-    }
-    .timer-num {
-      position: absolute;
-      inset: 0;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 10px;
-      font-weight: 700;
-      color: var(--text-accent);
-    }
-    .resend-btn {
-      background: none !important;
-      border: none !important;
-      padding: 0 !important;
-      height: auto !important;
-      min-width: 0 !important;
-      font-size: 13px !important;
-      font-weight: 600 !important;
-      color: var(--text-muted) !important;
-      cursor: not-allowed;
-      text-shadow: none !important;
-      box-shadow: none !important;
-      transition: color 0.2s;
-    }
-    .resend-btn.active {
-      color: var(--text-accent) !important;
-      cursor: pointer;
-    }
-    .resend-btn.active:hover {
-      text-decoration: underline;
-    }
-    
-    /* Hidden real input */
-    #otp-hidden {
-      display: none;
-    }
-    .step-item {
-      display: flex;
-      align-items: flex-start;
-      gap: 14px;
-      margin-bottom: 24px;
-    }
-    .step-dot {
-      width: 28px;
-      height: 28px;
-      border-radius: 50%;
-      background: rgba(255, 255, 255, 0.02);
-      border: 2px solid rgba(255, 255, 255, 0.08);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 11px;
-      font-weight: 700;
-      color: var(--text-muted);
-    }
-    .step-dot.active {
-      background: var(--text-accent);
-      border-color: var(--text-accent);
-      color: #fff;
-    }
-    .step-dot.done {
-      border-color: var(--text-accent);
-      color: var(--text-accent);
-    }
-  </style>
 </head>
-<body class="light-on">
+<body>
 
-<canvas id="bg-canvas"></canvas>
-
-<button class="btn-icon" onclick="toggleTheme()" title="Toggle theme" style="position:fixed;top:20px;right:20px;z-index:100;">
+<button class="theme-toggle-fixed" onclick="toggleTheme()" title="Toggle theme">
   <svg id="theme-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
     <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
   </svg>
 </button>
 
-<div class="ambient-bg">
-  <div class="orb orb-1"></div>
-  <div class="orb orb-2"></div>
-</div>
+<div class="auth-page">
+  <div class="auth-card">
 
-<div class="page-grid">
-
-  <!-- Left Side: Interactive Lamp & Headline -->
-  <section class="hero">
-    <a href="/" class="logo">
-      <div class="logo-icon">
+    <div class="auth-logo">
+      <div class="auth-logo-icon">
         <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor">
           <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 15v-4H7l5-8v4h4l-5 8z"/>
         </svg>
       </div>
-      <div class="logo-text-wrap">
-        <div class="logo-wordmark">MediAssist</div>
-        <div class="logo-tagline">AI Medical Assistant</div>
-      </div>
-    </a>
-
-    <div class="hero-content">
-      <h1 class="hero-headline">
-        Check<br>
-        Your <span class="accent">In</span><br>
-        box.
-      </h1>
-      <p class="hero-desc">
-        A 6-digit one-time code has been sent to your email. Enter it within 10 minutes to continue resetting your password.
-      </p>
-      
-      <!-- Interactive Lamp Component -->
-      <div class="lamp-container">
-        <div class="light-beam"></div>
-        <svg class="lamp-svg" viewBox="0 0 200 400" xmlns="http://www.w3.org/2000/svg">
-          <path d="M 60 380 Q 100 370 140 380 L 130 390 L 70 390 Z" fill="#1e1b4b" stroke="#312e81" stroke-width="2" />
-          <rect x="97" y="120" width="6" height="260" rx="2" fill="#1e1b4b" stroke="#312e81" stroke-width="1.5" />
-          <ellipse cx="100" cy="115" rx="14" ry="10" class="lamp-bulb-glow" fill="url(#bulbGlow)" />
-          <circle cx="100" cy="115" r="8" fill="#fef08a" opacity="0.8" />
-          <path d="M 70 60 L 130 60 Q 140 120 150 120 L 50 120 Q 60 120 70 60 Z" fill="#111827" stroke="#312e81" stroke-width="2.5" />
-          <ellipse cx="100" cy="120" rx="50" ry="8" fill="#1f2937" stroke="#312e81" stroke-width="1.5" />
-          <g class="pull-string" id="pullString" onclick="toggleLamp()">
-            <line x1="124" y1="120" x2="124" y2="210" stroke="#d1d5db" stroke-width="1.5" />
-            <rect x="120" y="210" width="8" height="15" rx="3" fill="#fbbf24" stroke="#d97706" stroke-width="1" />
-          </g>
-          <defs>
-            <radialGradient id="bulbGlow" cx="50%" cy="50%" r="50%">
-              <stop offset="0%" stop-color="#fef08a" stop-opacity="1" />
-              <stop offset="50%" stop-color="#fbbf24" stop-opacity="0.5" />
-              <stop offset="100%" stop-color="#f59e0b" stop-opacity="0" />
-            </radialGradient>
-          </defs>
-        </svg>
-      </div>
+      <div class="auth-logo-text">MediAssist</div>
     </div>
 
-    <!-- Stepper process -->
-    <div class="features" style="grid-template-columns: 1fr; gap: 8px;">
+    <h1 class="auth-heading">Verify your email</h1>
+    <p class="auth-subheading">Enter the 6-digit code sent to<br><strong style="color:var(--text-primary);">{{ email }}</strong></p>
+
+    <!-- Step indicators -->
+    <div class="steps-container">
       <div class="step-item">
         <div class="step-dot done">✓</div>
-        <div style="flex:1;">
-          <div style="font-weight:700; color:var(--text-accent); font-size:11px; text-transform:uppercase;">Step 1</div>
-          <div style="font-weight:700; font-size:14px; margin-bottom:2px;">Email Verified</div>
-          <div style="font-size:12.5px; color:var(--text-muted);">The password reset email request was successfully dispatched.</div>
+        <div>
+          <div class="step-label">Step 1</div>
+          <div class="step-title">Email Verified</div>
+          <div class="step-desc">Password reset request sent.</div>
         </div>
       </div>
-      
       <div class="step-item">
         <div class="step-dot active">2</div>
-        <div style="flex:1;">
-          <div style="font-weight:700; color:var(--text-accent); font-size:11px; text-transform:uppercase;">Step 2</div>
-          <div style="font-weight:700; font-size:14px; margin-bottom:2px;">Verify OTP</div>
-          <div style="font-size:12.5px; color:var(--text-muted);">Enter the code sent to your inbox. Valid for 10 minutes.</div>
+        <div>
+          <div class="step-label">Step 2</div>
+          <div class="step-title">Verify OTP</div>
+          <div class="step-desc">Enter the code. Valid for 10 minutes.</div>
         </div>
       </div>
     </div>
-  </section>
-
-  <!-- Right Side: Auth Card -->
-  <aside class="auth-panel">
-    <h2 class="auth-title">Verify OTP</h2>
-    <div class="auth-underline"></div>
-    <p class="auth-sub">Enter the 6-digit code sent to<br><span style="font-weight:700; color:var(--text-primary);">{{ email }}</span></p>
 
     <form action="{{ url_for('verify_otp', email=email) }}" method="POST" id="otp-form">
       {% if error %}
@@ -211,7 +59,6 @@
       </div>
       {% endif %}
 
-      <!-- 6 digit box nodes -->
       <div class="otp-group" id="otp-group">
         <input class="otp-box" type="text" maxlength="1" inputmode="numeric" pattern="[0-9]" autocomplete="one-time-code" />
         <input class="otp-box" type="text" maxlength="1" inputmode="numeric" pattern="[0-9]" />
@@ -223,9 +70,8 @@
 
       <input type="hidden" name="otp" id="otp-hidden" />
 
-      <p style="font-size:12.5px; color:var(--text-muted); margin-bottom: 24px;">Didn't see it? Check your spam folder.</p>
+      <p style="font-size:13px; color:var(--text-muted); margin-bottom: 20px; text-align:center;">Didn't see it? Check your spam folder.</p>
 
-      <!-- SVG Countdown Timer -->
       <div class="timer-row">
         <div class="timer-display">
           <div class="timer-ring-wrap">
@@ -243,26 +89,17 @@
         </button>
       </div>
 
-      <div class="auth-actions">
-        <button type="submit" class="submit-btn" id="verify-btn" disabled>Verify OTP</button>
-      </div>
+      <button type="submit" class="btn-primary" id="verify-btn" disabled>Verify OTP</button>
     </form>
 
-    <p class="back-link">
+    <div class="auth-footer">
       <a href="/forgot-password">← Back to Forgot Password</a>
-    </p>
-
-    <ul class="auth-bullets">
-      <li>Code expires in 10 minutes.</li>
-      <li>You can request a new code when the timer runs out.</li>
-    </ul>
-  </aside>
-
+    </div>
+  </div>
 </div>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script>
-  /* ===== Theme Toggle ===== */
+  /* Theme Toggle */
   function setThemeIcon(isLight) {
     const i = document.getElementById('theme-icon');
     if (!i) return;
@@ -280,108 +117,7 @@
     setThemeIcon(document.body.classList.contains('light'));
   })();
 
-  /* ===== Interactive Lamp & Sound Switch ===== */
-  function playClickSound() {
-    try {
-      const ctx = new (window.AudioContext || window.webkitAudioContext)();
-      const osc1 = ctx.createOscillator();
-      const gain1 = ctx.createGain();
-      osc1.connect(gain1); gain1.connect(ctx.destination);
-      osc1.type = 'triangle';
-      osc1.frequency.setValueAtTime(160, ctx.currentTime);
-      osc1.frequency.exponentialRampToValueAtTime(10, ctx.currentTime + 0.04);
-      gain1.gain.setValueAtTime(0.25, ctx.currentTime);
-      gain1.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.04);
-      osc1.start(); osc1.stop(ctx.currentTime + 0.04);
-
-      const osc2 = ctx.createOscillator();
-      const gain2 = ctx.createGain();
-      osc2.connect(gain2); gain2.connect(ctx.destination);
-      osc2.type = 'sine';
-      osc2.frequency.setValueAtTime(1100, ctx.currentTime);
-      osc2.frequency.exponentialRampToValueAtTime(600, ctx.currentTime + 0.01);
-      gain2.gain.setValueAtTime(0.06, ctx.currentTime);
-      gain2.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.012);
-      osc2.start(); osc2.stop(ctx.currentTime + 0.015);
-    } catch(e) {}
-  }
-
-  function toggleLamp() {
-    const string = document.getElementById('pullString');
-    playClickSound();
-    string.style.transform = 'translateY(10px)';
-    setTimeout(() => { string.style.transform = 'translateY(0)'; }, 100);
-    document.body.classList.toggle('light-on');
-    localStorage.setItem('lamp-light', document.body.classList.contains('light-on') ? 'on' : 'off');
-  }
-
-  (function() {
-    if (localStorage.getItem('lamp-light') === 'off') {
-      document.body.classList.remove('light-on');
-    }
-  })();
-
-  /* ===== Three.js Background Particle Scene ===== */
-  (function init3D() {
-    const canvas = document.getElementById('bg-canvas');
-    if (!window.THREE || !canvas) return;
-
-    const scene = new THREE.Scene();
-    const camera = new THREE.PerspectiveCamera(60, innerWidth / innerHeight, 0.1, 100);
-    camera.position.z = 10;
-
-    const renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true });
-    renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
-    renderer.setSize(innerWidth, innerHeight);
-
-    const ambient = new THREE.AmbientLight(0xffffff, 0.6);
-    scene.add(ambient);
-
-    const pointsGeo = new THREE.BufferGeometry();
-    const count = 400;
-    const pos = new Float32Array(count * 3);
-    for(let i=0; i<count*3; i++) {
-      pos[i] = (Math.random() - 0.5) * 30;
-    }
-    pointsGeo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-
-    const pointsMat = new THREE.PointsMaterial({
-      color: 0x818cf8,
-      size: 0.06,
-      transparent: true,
-      opacity: 0.4
-    });
-    const starField = new THREE.Points(pointsGeo, pointsMat);
-    scene.add(starField);
-
-    const mouse = { x: 0, y: 0, targetX: 0, targetY: 0 };
-    window.addEventListener('mousemove', (e) => {
-      mouse.targetX = (e.clientX / window.innerWidth - 0.5) * 3;
-      mouse.targetY = (e.clientY / window.innerHeight - 0.5) * 3;
-    });
-
-    window.addEventListener('resize', () => {
-      camera.aspect = window.innerWidth / window.innerHeight;
-      camera.updateProjectionMatrix();
-      renderer.setSize(window.innerWidth, window.innerHeight);
-    });
-
-    const clock = new THREE.Clock();
-    function animate() {
-      const elapsed = clock.getElapsedTime();
-      mouse.x += (mouse.targetX - mouse.x) * 0.05;
-      mouse.y += (mouse.targetY - mouse.y) * 0.05;
-      
-      starField.rotation.y = elapsed * 0.02 + mouse.x * 0.1;
-      starField.rotation.x = mouse.y * 0.1;
-
-      renderer.render(scene, camera);
-      requestAnimationFrame(animate);
-    }
-    animate();
-  })();
-
-  /* ===== OTP digit boxes navigation logic ===== */
+  /* OTP digit boxes navigation */
   const boxes = Array.from(document.querySelectorAll('.otp-box'));
   const hiddenInput = document.getElementById('otp-hidden');
   const verifyBtn = document.getElementById('verify-btn');
@@ -425,14 +161,14 @@
     verifyBtn.disabled = val.length < 6;
   }
 
-  /* ===== Countdown Timer logic ===== */
+  /* Countdown Timer */
   const TOTAL = 600;
   let remaining = TOTAL;
   const fg = document.getElementById('timer-fg');
   const timerNum = document.getElementById('timer-num');
   const timerLabel = document.getElementById('timer-label');
   const resendBtn = document.getElementById('resend-btn');
-  const circumference = 2 * Math.PI * 15; // 94.24
+  const circumference = 2 * Math.PI * 15;
 
   function updateTimer() {
     const mins = String(Math.floor(remaining / 60)).padStart(2, '0');

@@ -5,148 +5,49 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>MediAssist — AI Health Companion</title>
+    <meta name="description" content="MediAssist AI-powered medical assistant for symptom analysis, drug info, and health guidance." />
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
     <!-- LiveKit SDK -->
     <script src="https://cdn.jsdelivr.net/npm/livekit-client@2.11.4/dist/livekit-client.umd.min.js"></script>
-    <style>
-      /* Quick overrides/inline fixes for loading orb */
-      #loader {
-        position: fixed; inset: 0; z-index: 9999;
-        background: radial-gradient(circle at 50% 50%, #0d0d15 0%, #050508 100%);
-        display: flex; flex-direction: column; align-items: center; justify-content: center;
-        gap: 28px; transition: opacity 0.7s ease, visibility 0.7s ease;
-      }
-      #loader.hidden { opacity: 0; visibility: hidden; pointer-events: none; }
-      #loader .loader-orb { width: 88px; height: 88px; position: relative; transform-style: preserve-3d; animation: loaderSpin 2.2s linear infinite; }
-      #loader .loader-ring { position: absolute; inset: 0; border-radius: 50%; border: 2px solid transparent; border-top-color: var(--text-accent); border-right-color: rgba(99, 102, 241, 0.4); }
-      #loader .loader-ring:nth-child(2) { transform: rotateX(70deg); border-top-color: #fff; }
-      #loader .loader-ring:nth-child(3) { transform: rotateY(70deg); border-top-color: var(--text-crimson); }
-      @keyframes loaderSpin { 0% { transform: rotateX(0) rotateY(0); } 100% { transform: rotateX(360deg) rotateY(360deg); } }
-      #loader .loader-text { font-family: var(--font-display); color: #fff; font-size: 24px; letter-spacing: 2px; }
-      #loader .loader-text span { color: var(--text-accent); }
-      #loader .loader-sub { color: #888; font-size: 11px; letter-spacing: 0.3em; text-transform: uppercase; }
-      #loader .loader-bar { width: 220px; height: 2px; background: rgba(255,255,255,0.08); border-radius: 2px; overflow: hidden; }
-      #loader .loader-bar::after { content: ''; display: block; height: 100%; width: 40%; background: linear-gradient(90deg, transparent, var(--text-accent), transparent); animation: loadSlide 1.4s ease-in-out infinite; }
-      @keyframes loadSlide { 0% { transform: translateX(-100%); } 100% { transform: translateX(350%); } }
-
-      .history-menu {
-        display: none;
-        position: absolute;
-        right: 12px;
-        top: 48px;
-        background: #0f0f15;
-        border: 1px solid rgba(255,255,255,0.08);
-        border-radius: 10px;
-        z-index: 999;
-        box-shadow: 0 10px 25px rgba(0,0,0,0.5);
-      }
-      .history-menu button {
-        min-width: unset !important;
-        width: 120px !important;
-        height: 38px !important;
-        padding: 0 12px !important;
-        background: none !important;
-        border: none !important;
-        color: #ef4444 !important;
-        font-size: 12.5px !important;
-        text-align: left !important;
-        cursor: pointer !important;
-        box-shadow: none !important;
-        text-shadow: none !important;
-      }
-      .history-menu button:hover {
-        background: rgba(239, 68, 68, 0.08) !important;
-      }
-      .menu-btn {
-        position: absolute; right: 12px; top: 50%; transform: translateY(-50%);
-        background: none !important; border: none !important; color: var(--text-muted);
-        min-width: unset !important; width: 24px !important; height: 24px !important;
-        padding: 0 !important; cursor: pointer; font-size: 16px; box-shadow: none !important;
-        text-shadow: none !important;
-      }
-      .menu-btn:hover { color: var(--text-primary); }
-
-      /* Voice Toast status */
-      #voiceToast {
-        position: fixed; bottom: 100px; left: 50%; transform: translateX(-50%);
-        background: rgba(14, 14, 22, 0.9); border: 1px solid var(--border-glow);
-        color: #fff; padding: 10px 22px; border-radius: 99px; font-size: 13.5px;
-        z-index: 9000; pointer-events: none; opacity: 0; transition: opacity 0.3s ease;
-      }
-      #voiceToast.show { opacity: 1; }
-      
-      .voice-label { font-size: 10px; font-weight: 700; text-transform: uppercase; color: var(--text-accent); margin-bottom: 4px; display: block; }
-      
-      .language-select {
-        appearance: none;
-        -webkit-appearance: none;
-        background-image: url("data:image/svg+xml;utf8,<svg fill='white' height='20' viewBox='0 0 24 24' width='20' xmlns='http://www.w3.org/2000/svg'><path d='M7 10l5 5 5-5z'/></svg>");
-        background-repeat: no-repeat;
-        background-position: right 10px center;
-        padding-right: 32px !important;
-        background-color: rgba(255,255,255,0.04);
-        border: 1px solid rgba(255,255,255,0.08);
-        color: #fff;
-        padding: 0 14px;
-        border-radius: 12px;
-        height: 42px;
-        font-size: 13.5px;
-        font-weight: 500;
-        cursor: pointer;
-        outline: none;
-        margin-right: 12px;
-        transition: all 0.3s ease;
-      }
-      .language-select:hover {
-        background-color: rgba(255,255,255,0.08) !important;
-        border-color: var(--text-accent) !important;
-      }
-    </style>
 </head>
 
 <body>
 
     <div id="voiceToast">🎙️ Connecting…</div>
 
-    <!-- ===== Premium Loader Screen ===== -->
+    <!-- Loader -->
     <div id="loader">
-      <div class="loader-orb">
-        <div class="loader-ring"></div>
-        <div class="loader-ring"></div>
-        <div class="loader-ring"></div>
-      </div>
+      <div class="loader-spinner"></div>
       <div class="loader-text">Medi<span>Assist</span></div>
       <div class="loader-bar"></div>
-      <div class="loader-sub">Connecting to Medical Command Center</div>
-    </div>
-
-    <!-- WebGL interactive canvas -->
-    <canvas id="bg-canvas"></canvas>
-
-    <div class="ambient-bg">
-        <div class="orb orb-1"></div>
-        <div class="orb orb-2"></div>
+      <div class="loader-sub">Loading your workspace</div>
     </div>
 
     <div class="app-shell">
 
-        <!-- Sidebar Glass Panel -->
-        <aside class="sidebar">
-            <div class="sidebar-logo">
-                <div class="logo-icon">
-                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
-                        <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 15v-4H7l5-8v4h4l-5 8z" fill="currentColor" />
-                    </svg>
+        <!-- Sidebar -->
+        <aside class="sidebar" id="sidebar">
+            <div class="sidebar-header">
+                <div class="sidebar-logo">
+                    <div class="sidebar-logo-icon">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 15v-4H7l5-8v4h4l-5 8z"/>
+                        </svg>
+                    </div>
+                    <span class="sidebar-logo-text">MediAssist</span>
                 </div>
-                <span class="logo-text" style="font-family: var(--font-display); font-weight: 700; font-size: 18px;">MediAssist</span>
+                <button class="sidebar-toggle-btn" onclick="toggleSidebar()" title="Toggle Sidebar">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="3" y="3" width="18" height="18" rx="2"/><line x1="9" y1="3" x2="9" y2="21"/>
+                    </svg>
+                </button>
             </div>
 
             <button class="new-chat-btn" onclick="newChat()">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-                    <line x1="12" y1="5" x2="12" y2="19" />
-                    <line x1="5" y1="12" x2="19" y2="12" />
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M12 20h9"/><path d="M16.376 3.622a1 1 0 0 1 3.002 3.002L7.368 18.635a2 2 0 0 1-.855.506l-2.872.838.838-2.872a2 2 0 0 1 .506-.855z"/>
                 </svg>
-                New Consultation
+                New Chat
             </button>
 
             <div class="sidebar-section-label">Recent Consultations</div>
@@ -166,116 +67,131 @@
             </nav>
 
             <div class="sidebar-footer">
-                <button class="btn-glossy btn-secondary memory-manage-btn" onclick="openMemoryModal()" style="height: 38px; width: 100% !important; border-radius: 12px; margin-bottom: 14px; font-size: 12.5px; padding: 0 12px;">
+                <button class="memory-btn" onclick="openMemoryModal()">
                     🧠 Manage AI Memory
                 </button>
-                <div class="disclaimer-badge">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
-                        <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z" />
+
+                <div class="sidebar-user">
+                    {% if user.avatar %}
+                    <img src="{{ user.avatar }}" class="sidebar-user-avatar" alt="{{ user.name }}" />
+                    {% else %}
+                    <div class="sidebar-user-avatar-fallback">{{ user.name[0] | upper }}</div>
+                    {% endif %}
+                    <span class="sidebar-user-name">{{ user.name }}</span>
+                    <a href="/logout" class="btn-signout">Sign out</a>
+                </div>
+
+                <div class="sidebar-disclaimer">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style="flex-shrink:0; margin-top:1px; color:var(--text-muted);">
+                        <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/>
                     </svg>
                     For informational purposes only. Consult a physician for emergencies.
                 </div>
             </div>
         </aside>
 
-        <!-- Main Chat Center -->
+        <!-- Main Chat Panel -->
         <main class="chat-panel">
             <header class="chat-header">
                 <div class="header-left">
-                    <div class="status-dot"></div>
+                    <button class="btn-icon sidebar-mobile-toggle" onclick="toggleSidebar()" title="Toggle Sidebar" style="display:none;">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/>
+                        </svg>
+                    </button>
                     <div>
-                        <div class="header-title">Medical Assistant AI</div>
-                        <div class="header-sub">MediAssist Companion · Online</div>
+                        <div class="header-model-name">MediAssist AI</div>
+                        <div class="header-status">Medical Companion · Online</div>
                     </div>
                 </div>
-                
+
                 <div class="header-actions">
-                    <!-- Language Selection Dropdown -->
                     <select class="language-select" id="voiceLangSelect" title="Select Voice Language">
-                        <option value="en" style="background:#0f0f15; color:#fff;">🇺🇸 English</option>
-                        <option value="es" style="background:#0f0f15; color:#fff;">🇪🇸 Español</option>
-                        <option value="fr" style="background:#0f0f15; color:#fff;">🇫🇷 Français</option>
-                        <option value="de" style="background:#0f0f15; color:#fff;">🇩🇪 Deutsch</option>
-                        <option value="it" style="background:#0f0f15; color:#fff;">🇮🇹 Italiano</option>
-                        <option value="nl" style="background:#0f0f15; color:#fff;">🇳🇱 Nederlands</option>
-                        <option value="ja" style="background:#0f0f15; color:#fff;">🇯🇵 日本語</option>
+                        <option value="en">🇺🇸 English</option>
+                        <option value="es">🇪🇸 Español</option>
+                        <option value="fr">🇫🇷 Français</option>
+                        <option value="de">🇩🇪 Deutsch</option>
+                        <option value="it">🇮🇹 Italiano</option>
+                        <option value="nl">🇳🇱 Nederlands</option>
+                        <option value="ja">🇯🇵 日本語</option>
                     </select>
 
-                    <!-- Premium Pill Mic Button -->
-                    <button class="btn-glossy voice-btn" id="micBtn" onclick="toggleVoice()" title="Start / Stop Voice Chat">
+                    <button class="voice-btn" id="micBtn" onclick="toggleVoice()" title="Start / Stop Voice Chat">
                         <span class="voice-dot"></span>
                         <span class="voice-mic-icon">🎙️</span>
-                        <span class="voice-text" id="voiceBtnText">Start Voice Consultation</span>
+                        <span class="voice-text" id="voiceBtnText">Voice</span>
                     </button>
-                    
-                    <div class="header-utilities">
-                        <button class="btn-icon" title="Toggle Theme" onclick="toggleTheme()" id="themeToggle">
-                            <svg id="theme-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
-                            </svg>
-                        </button>
-                        
-                        <button class="btn-icon" title="Clear Session" onclick="clearChat()">
-                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <polyline points="1 4 1 10 7 10" />
-                                <path d="M3.51 15a9 9 0 1 0 .49-3.51" />
-                            </svg>
-                        </button>
-                    </div>
-                    
-                    <div class="user-info" style="display:flex; align-items:center; gap:10px; margin-left:12px; border-left:1px solid rgba(255,255,255,0.06); padding-left:16px;">
+
+                    <button class="btn-icon" title="Toggle Theme" onclick="toggleTheme()" id="themeToggle">
+                        <svg id="theme-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+                        </svg>
+                    </button>
+
+                    <button class="btn-icon" title="Clear Session" onclick="clearChat()">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <polyline points="1 4 1 10 7 10" />
+                            <path d="M3.51 15a9 9 0 1 0 .49-3.51" />
+                        </svg>
+                    </button>
+
+                    <div class="header-user">
                         {% if user.avatar %}
-                        <img src="{{ user.avatar }}" class="user-avatar" alt="{{ user.name }}" style="width:32px; height:32px; border-radius:50%; object-fit:cover;" />
+                        <img src="{{ user.avatar }}" class="header-user-avatar" alt="{{ user.name }}" />
                         {% else %}
-                        <div class="user-avatar-fallback" style="width:32px; height:32px; border-radius:50%; background:var(--text-accent); color:#fff; display:grid; place-items:center; font-weight:700;">{{ user.name[0] | upper }}</div>
+                        <div class="header-user-avatar-fallback">{{ user.name[0] | upper }}</div>
                         {% endif %}
-                        <span class="user-name" style="font-weight:500;">{{ user.name }}</span>
-                        <a href="/logout" class="btn-glossy btn-secondary" style="height:36px; padding:0 14px; min-width:unset; font-size:12.5px;">Sign out</a>
                     </div>
                 </div>
             </header>
 
-            <!-- Chat screen console -->
+            <!-- Chat messages area -->
             <div class="messages-area" id="messagesArea">
                 <div class="welcome-state" id="welcomeState">
-                    <div class="welcome-pulse">
-                        <div class="pulse-ring"></div>
-                        <div class="pulse-core">
-                            <svg width="32" height="32" viewBox="0 0 24 24" fill="none">
-                                <path d="M19 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2zm-7 14l-5-5 1.41-1.41L12 14.17l7.59-7.59L21 8l-9 9z" fill="currentColor" />
-                            </svg>
-                        </div>
+                    <div class="welcome-logo">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 15v-4H7l5-8v4h4l-5 8z"/>
+                        </svg>
                     </div>
                     <h2 class="welcome-title">How can I help you today?</h2>
-                    <p class="welcome-sub">Describe symptoms, ask about dosage parameters, or request wellness plans. I am ready to assist.</p>
-                    <div class="suggestion-chips">
-                        <button onclick="insertPrompt('I have a headache and mild fever, what could it be?')">Headache &amp; Fever</button>
-                        <button onclick="insertPrompt('What foods help boost the immune system?')">Immune Foods</button>
-                        <button onclick="insertPrompt('How do I manage stress and anxiety naturally?')">Manage Stress</button>
+                    <p class="welcome-sub">Describe symptoms, ask about medications, or request wellness plans. I'm ready to assist.</p>
+                    <div class="suggestion-grid">
+                        <button class="suggestion-card" onclick="insertPrompt('I have a headache and mild fever, what could it be?')">
+                            <div class="suggestion-card-title">Headache & Fever</div>
+                            <div class="suggestion-card-desc">Get structured insights and triage guidance</div>
+                        </button>
+                        <button class="suggestion-card" onclick="insertPrompt('What foods help boost the immune system?')">
+                            <div class="suggestion-card-title">Immune Foods</div>
+                            <div class="suggestion-card-desc">Nutrition advice for stronger immunity</div>
+                        </button>
+                        <button class="suggestion-card" onclick="insertPrompt('How do I manage stress and anxiety naturally?')">
+                            <div class="suggestion-card-title">Manage Stress</div>
+                            <div class="suggestion-card-desc">Natural strategies for mental wellness</div>
+                        </button>
                     </div>
                 </div>
                 <div id="messagesList"></div>
             </div>
 
-            <!-- Input area console -->
+            <!-- Input area -->
             <div class="input-area">
                 <div class="input-wrap">
                     <textarea
                         id="userInput"
                         class="chat-input"
-                        placeholder="Describe your symptoms or ask a medical question..."
+                        placeholder="How can I help you today?"
                         rows="1"
                         onkeydown="handleKey(event)"
                         oninput="autoResize(this)"
                     ></textarea>
-                    <button class="btn-icon" id="sendBtn" onclick="sendMessage()">
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                    <button class="send-btn" id="sendBtn" onclick="sendMessage()">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
                             <line x1="22" y1="2" x2="11" y2="13" />
                             <polygon points="22 2 15 22 11 13 2 9 22 2" />
                         </svg>
                     </button>
                 </div>
-                <p class="input-disclaimer">MediAssist AI is an advisory guidance tool only. Always seek direct professional medical diagnosis.</p>
+                <p class="input-disclaimer">MediAssist AI is an advisory tool only. Always seek professional medical diagnosis.</p>
             </div>
         </main>
 
@@ -286,7 +202,7 @@
         <audio id="remoteAudio" autoplay playsinline></audio>
     </div>
 
-    <!-- Glassmorphic Memory Management Modal -->
+    <!-- Memory Modal -->
     <div class="modal-overlay" id="memoryModal" onclick="closeMemoryModal(event)">
         <div class="modal-card" onclick="event.stopPropagation()">
             <h3 class="modal-title">🧠 Personalization Memory</h3>
@@ -295,13 +211,18 @@
                 Loading medical memory...
             </div>
             <div class="modal-actions">
-                <button class="btn-glossy btn-secondary" onclick="clearMemory()" style="height:42px; border-radius:12px; font-size:13px; color:var(--text-crimson) !important;">Clear Memory</button>
-                <button class="btn-glossy" onclick="closeMemoryModal(null)" style="height:42px; border-radius:12px; font-size:13px;">Done</button>
+                <button onclick="clearMemory()">Clear Memory</button>
+                <button onclick="closeMemoryModal(null)">Done</button>
             </div>
         </div>
     </div>
 
     <script>
+        // ── Sidebar toggle ─────────────────────────────────
+        function toggleSidebar() {
+            document.getElementById('sidebar').classList.toggle('open');
+        }
+
         // ── Session actions ───────────────────────────────────
         async function newChat() {
             await fetch("/new_chat", { method: "POST" });
@@ -364,8 +285,7 @@
             if (role === "assistant") {
                 const avatar = document.createElement("div");
                 avatar.className = "avatar";
-                avatar.style = "width:32px; height:32px; border-radius:50%; background:rgba(99,102,241,0.08); border:1px solid var(--border-glow); display:grid; place-items:center; color:var(--text-accent); flex-shrink:0;";
-                avatar.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 15v-4H7l5-8v4h4l-5 8z"/></svg>`;
+                avatar.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 15v-4H7l5-8v4h4l-5 8z"/></svg>`;
                 wrap.appendChild(avatar);
             }
 
@@ -400,8 +320,7 @@
 
             const avatar = document.createElement("div");
             avatar.className = "avatar";
-            avatar.style = "width:32px; height:32px; border-radius:50%; background:rgba(99,102,241,0.08); border:1px solid var(--border-glow); display:grid; place-items:center; color:var(--text-accent); flex-shrink:0;";
-            avatar.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 15v-4H7l5-8v4h4l-5 8z"/></svg>`;
+            avatar.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 15v-4H7l5-8v4h4l-5 8z"/></svg>`;
             wrap.appendChild(avatar);
 
             const bubble = document.createElement("div");
@@ -435,10 +354,7 @@
             list.appendChild(typing);
             scrollToBottom();
 
-            // Trigger reactive Three.js pulse when sending message
-            if (window.triggerSpherePulse) window.triggerSpherePulse(1.5, 8.0);
-
-            // If Voice mode is active, also send text to LiveKit agent so it speaks the answer
+            // If Voice mode is active, also send text to LiveKit agent
             if (voiceActive && livekitRoom) {
                 try {
                     const payload = new TextEncoder().encode(JSON.stringify({ type: "user_text", text: text }));
@@ -458,9 +374,6 @@
                 const botEl = createMessageEl(answer, "assistant", true);
                 list.appendChild(botEl);
                 requestAnimationFrame(() => botEl.classList.add("visible"));
-                
-                // Pulse again on response
-                if (window.triggerSpherePulse) window.triggerSpherePulse(1.8, 6.0);
             } catch (error) {
                 console.error(error);
                 typing.remove();
@@ -508,7 +421,6 @@
             const isLight = document.body.classList.toggle("light");
             localStorage.setItem("theme", isLight ? "light" : "dark");
             setThemeIcon(isLight);
-            if (window.updateSphereColor) window.updateSphereColor(!isLight);
         }
         (function () {
             if (localStorage.getItem("theme") === "light") {
@@ -525,20 +437,12 @@
 
         function attachRemoteAudio(track) {
             if (!track || track.kind !== LivekitClient.Track.Kind.Audio) return;
-            
-            // Dynamically attach track to get a new HTMLAudioElement.
-            // This is the standard, most reliable way to play audio tracks in LiveKit SDK.
             const audioEl = track.attach();
             audioEl.autoplay = true;
             audioEl.playsinline = true;
-            
-            // Append it to our audio-sink container
             const sink = document.getElementById("audio-sink");
-            if (sink) {
-                sink.appendChild(audioEl);
-            } else {
-                document.body.appendChild(audioEl);
-            }
+            if (sink) { sink.appendChild(audioEl); }
+            else { document.body.appendChild(audioEl); }
         }
 
         function attachExistingRemoteAudio(room) {
@@ -629,9 +533,6 @@
             if (seenTranscripts.has(key)) return;
             seenTranscripts.add(key);
             appendVoiceBubble(json.role, json.text);
-            
-            // Pulse Three.js sphere reactively when voice transcript updates
-            if (window.triggerSpherePulse) window.triggerSpherePulse(1.6, 6.0);
         }
 
         function showToast(msg, durationMs = 3000) {
@@ -711,40 +612,32 @@
                 btn.classList.remove("voice-connecting");
                 btn.classList.add("voice-active");
                 btn.disabled = false;
-                document.getElementById("voiceBtnText").textContent = "Disconnect Voice";
-                showToast("🎙️ Listening - Speak naturally", 3000);
-                
-                // Continuous voice pulsing animation trigger
-                if (window.setVoiceSpeakingState) window.setVoiceSpeakingState(true);
+                document.getElementById("voiceBtnText").textContent = "Disconnect";
+                showToast("🎙️ Listening — Speak naturally", 3000);
 
             } catch (err) {
                 console.error(err);
                 if (livekitRoom) { try { await livekitRoom.disconnect(); } catch (_) {} livekitRoom = null; }
                 btn.classList.remove("voice-connecting");
                 btn.disabled = false;
-                document.getElementById("voiceBtnText").textContent = "Start Voice Consultation";
+                document.getElementById("voiceBtnText").textContent = "Voice";
                 showToast("❌ Connection failed: " + err.message, 4000);
             }
         }
 
         async function stopVoice() {
-            if (window.setVoiceSpeakingState) window.setVoiceSpeakingState(false);
             if (livekitRoom) {
                 try { await livekitRoom.disconnect(); } catch (_) {}
                 livekitRoom = null;
             }
-            
-            // Clean up all dynamically attached audio elements
             const sink = document.getElementById("audio-sink");
-            if (sink) {
-                sink.innerHTML = "";
-            }
-            
+            if (sink) { sink.innerHTML = ""; }
+
             voiceActive = false;
             const btn = document.getElementById("micBtn");
             btn.classList.remove("voice-active", "voice-connecting");
             btn.disabled = false;
-            document.getElementById("voiceBtnText").textContent = "Start Voice Consultation";
+            document.getElementById("voiceBtnText").textContent = "Voice";
             showToast("🔇 Voice stream closed", 2000);
         }
 
@@ -757,7 +650,7 @@
             scrollToBottom();
         }
 
-        // Auto-load last active session if present on page load
+        // Auto-load last active session
         window.addEventListener('DOMContentLoaded', () => {
             const activeSessionId = "{{ active_session_id or '' }}";
             if (activeSessionId) {
@@ -765,13 +658,13 @@
             }
         });
 
-        // AI Memory Modal management functions
+        // AI Memory Modal
         async function openMemoryModal() {
             const modal = document.getElementById("memoryModal");
             const content = document.getElementById("memoryContent");
             modal.classList.add("active");
-            content.innerHTML = '<span class="loading-pulse">Retrieving profile memory...</span>';
-            
+            content.innerHTML = 'Retrieving profile memory...';
+
             try {
                 const res = await fetch("/get_memory");
                 const data = await res.json();
@@ -781,7 +674,7 @@
                     content.innerHTML = '<span style="color:var(--text-muted); font-style:italic;">No medical facts stored yet. Describe symptoms, diagnoses, or allergies in chat, and they will automatically populate here.</span>';
                 }
             } catch (e) {
-                content.innerHTML = '<span style="color:var(--text-crimson);">Failed to retrieve memory database.</span>';
+                content.innerHTML = '<span style="color:var(--text-error);">Failed to retrieve memory database.</span>';
             }
         }
 
@@ -799,156 +692,33 @@
                 const res = await fetch("/clear_memory", { method: "POST" });
                 const data = await res.json();
                 if (data.status === "ok") {
-                    content.innerHTML = '<span style="color:#34d399;">Memory database cleared successfully.</span>';
+                    content.innerHTML = '<span style="color:var(--text-success);">Memory database cleared successfully.</span>';
                 } else {
-                    content.innerHTML = '<span style="color:var(--text-crimson);">Error clearing database.</span>';
+                    content.innerHTML = '<span style="color:var(--text-error);">Error clearing database.</span>';
                 }
             } catch (e) {
-                content.innerHTML = '<span style="color:var(--text-crimson);">Connection error.</span>';
+                content.innerHTML = '<span style="color:var(--text-error);">Connection error.</span>';
             }
         }
-    </script>
 
-    <!-- ===== Three.js WebGL Hologram Canvas Logic ===== -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-    <script>
-      window.addEventListener('load', () => {
-        setTimeout(() => {
-          const l = document.getElementById('loader');
-          if (l) l.classList.add('hidden');
-        }, 800);
-      });
-
-      /* ===== Futuristic Hologram Orb Scene ===== */
-      (function initFuturisticSphere() {
-        const canvas = document.getElementById('bg-canvas');
-        if (!window.THREE || !canvas) return;
-
-        const scene = new THREE.Scene();
-        const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 100);
-        camera.position.z = 12;
-
-        const renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true });
-        renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
-        renderer.setSize(window.innerWidth, window.innerHeight);
-
-        // Hologram glowing points sphere
-        const particleCount = 1200;
-        const geometry = new THREE.BufferGeometry();
-        const positions = new Float32Array(particleCount * 3);
-        const originalPositions = [];
-
-        const radius = 3.5;
-        for (let i = 0; i < particleCount; i++) {
-          // Uniform spherical coordinates distribution
-          const u = Math.random();
-          const v = Math.random();
-          const theta = u * 2.0 * Math.PI;
-          const phi = Math.acos(2.0 * v - 1.0);
-          
-          const x = radius * Math.sin(phi) * Math.cos(theta);
-          const y = radius * Math.sin(phi) * Math.sin(theta);
-          const z = radius * Math.cos(phi);
-
-          positions[i * 3] = x;
-          positions[i * 3 + 1] = y;
-          positions[i * 3 + 2] = z;
-
-          originalPositions.push(new THREE.Vector3(x, y, z));
-        }
-
-        geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-
-        const mat = new THREE.PointsMaterial({
-          color: 0x6366f1,
-          size: 0.05,
-          transparent: true,
-          opacity: 0.65,
-          blending: THREE.AdditiveBlending
+        // Loader dismiss
+        window.addEventListener('load', () => {
+            setTimeout(() => {
+                const l = document.getElementById('loader');
+                if (l) l.classList.add('hidden');
+            }, 600);
         });
 
-        const sphere = new THREE.Points(geometry, mat);
-        scene.add(sphere);
-
-        // Add some orbit rings
-        const ringGeo = new THREE.RingGeometry(4.2, 4.25, 64);
-        const ringMat = new THREE.MeshBasicMaterial({ color: 0x818cf8, side: THREE.DoubleSide, transparent: true, opacity: 0.15 });
-        const ring = new THREE.Mesh(ringGeo, ringMat);
-        ring.rotation.x = Math.PI / 2.5;
-        scene.add(ring);
-
-        // Reactive properties
-        let pulseAmplitude = 0.0;
-        let pulseSpeed = 1.0;
-        let isVoiceSpeaking = false;
-
-        window.triggerSpherePulse = function(intensity = 1.5, speed = 8.0) {
-          pulseAmplitude = intensity;
-          pulseSpeed = speed;
-        };
-
-        window.setVoiceSpeakingState = function(state) {
-          isVoiceSpeaking = state;
-        };
-
-        window.updateSphereColor = function(isDark) {
-          mat.color.set(isDark ? 0x818cf8 : 0x4f46e5);
-          ringMat.color.set(isDark ? 0x818cf8 : 0x4f46e5);
-        };
-
-        const mouse = { x: 0, y: 0, tx: 0, ty: 0 };
-        window.addEventListener('mousemove', (e) => {
-          mouse.tx = (e.clientX / window.innerWidth - 0.5) * 4;
-          mouse.ty = (e.clientY / window.innerHeight - 0.5) * 4;
-        });
-
-        window.addEventListener('resize', () => {
-          camera.aspect = window.innerWidth / window.innerHeight;
-          camera.updateProjectionMatrix();
-          renderer.setSize(window.innerWidth, window.innerHeight);
-        });
-
-        const clock = new THREE.Clock();
-
-        function animate() {
-          const t = clock.getElapsedTime();
-          
-          mouse.x += (mouse.tx - mouse.x) * 0.05;
-          mouse.y += (mouse.ty - mouse.y) * 0.05;
-
-          sphere.rotation.y = t * 0.05 + mouse.x * 0.05;
-          sphere.rotation.x = mouse.y * 0.05;
-          
-          ring.rotation.z = -t * 0.1;
-          ring.rotation.y = Math.sin(t * 0.2) * 0.2;
-
-          // Pulse attenuation
-          if (pulseAmplitude > 0.05) {
-            pulseAmplitude -= 0.02;
-          } else {
-            pulseAmplitude = 0.05;
-          }
-
-          // Dynamic wave deformation of sphere particles
-          const posAttr = geometry.attributes.position;
-          const amp = isVoiceSpeaking ? 0.4 + Math.sin(t * 12) * 0.15 : pulseAmplitude;
-          
-          for (let i = 0; i < particleCount; i++) {
-            const orig = originalPositions[i];
-            
-            // Simple noise using sine/cosine relative to position
-            const wave = Math.sin(orig.x * 2.0 + t * 4.0) * Math.cos(orig.y * 2.0 + t * 4.0) * amp;
-            const newPos = orig.clone().normalize().multiplyScalar(radius + wave);
-
-            posAttr.setXYZ(i, newPos.x, newPos.y, newPos.z);
-          }
-          posAttr.needsUpdate = true;
-
-          renderer.render(scene, camera);
-          requestAnimationFrame(animate);
-        }
-        animate();
-      })();
+        // Mobile sidebar responsive
+        (function() {
+            const mq = window.matchMedia('(max-width: 768px)');
+            function handleMQ(e) {
+                const toggleBtn = document.querySelector('.sidebar-mobile-toggle');
+                if (toggleBtn) toggleBtn.style.display = e.matches ? 'grid' : 'none';
+            }
+            mq.addEventListener('change', handleMQ);
+            handleMQ(mq);
+        })();
     </script>
 </body>
 
