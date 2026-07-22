@@ -4,6 +4,11 @@ import time
 import subprocess
 import threading
 
+# Gunicorn performance & timeout settings
+timeout = 120
+graceful_timeout = 30
+keepalive = 5
+
 _worker_process = None
 _supervisor_thread = None
 _keep_running = True

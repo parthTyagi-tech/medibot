@@ -114,8 +114,8 @@ def _validate_env() -> None:
 
 def prewarm(proc: JobProcess) -> None:
     proc.userdata["vad"] = silero.VAD.load(
-        min_speech_duration=0.05,
-        min_silence_duration=0.3,
+        min_speech_duration=0.25,
+        min_silence_duration=0.5,
         prefix_padding_duration=0.2,
     )
 
@@ -327,8 +327,8 @@ async def entrypoint(ctx: JobContext):
     if vad is None:
         print("Loading VAD in job (prewarm miss)...")
         vad = silero.VAD.load(
-            min_speech_duration=0.05,
-            min_silence_duration=0.3,
+            min_speech_duration=0.25,
+            min_silence_duration=0.5,
             prefix_padding_duration=0.2,
         )
 

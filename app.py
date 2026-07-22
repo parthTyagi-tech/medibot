@@ -838,6 +838,57 @@ def tts():
 # Routes — Voice (LiveKit)
 # ─────────────────────────────────────────────────────────────
 
+def generate_voice_response(msg: str, user=None) -> str:
+    """Generates a non-streaming voice response for voice_worker.py."""
+    try:
+        intent = classify_intent(classifierModel, msg)
+        chat_session = None
+        if user:
+            chat_session = get_active_session_for_user(user.id)
+            user_msg = Message(session_id=chat_session.id, role="user", content=msg)
+            db.session.add(user_msg)
+            db.session.commit()
+
+        history_text = build_history_text(chat_session) if chat_session else ""
+        user_memory = get_user_memory(user) if user else "Voice Session"
+        dynamic_prompt = build_prompt(history_text, user_memory, user=user)
+
+        answer = ""
+        if intent == "medical_query":
+            docs = retriever.invoke(msg)
+            context = "\n\n".join([doc.page_content for doc in docs])
+            formatted_prompt = dynamic_prompt.format(context=context, input=msg)
+            response_obj = chatModel.invoke(formatted_prompt)
+            answer = response_obj.content if hasattr(response_obj, "content") else str(response_obj)
+        else:
+            if intent == "memory_recall":
+                prompt_val = f"User Memory:\n{user_memory}\n\nConversation History:\n{history_text}\n\nUser:\n{msg}"
+            elif intent == "greeting":
+                prompt_val = f"Reply naturally to: {msg}"
+            elif intent == "account_action":
+                answer = "Please use the account controls available in the application."
+                prompt_val = None
+            elif intent == "general_chat":
+                prompt_val = f"Conversation History:\n{history_text}\n\nUser:\n{msg}"
+            else:
+                prompt_val = msg
+
+            if prompt_val:
+                response_obj = chatModel.invoke(prompt_val)
+                answer = response_obj.content if hasattr(response_obj, "content") else str(response_obj)
+
+        if chat_session and answer:
+            bot_msg = Message(session_id=chat_session.id, role="assistant", content=answer)
+            db.session.add(bot_msg)
+            chat_session.updated_at = datetime.now(timezone.utc)
+            db.session.commit()
+
+        return answer or "I am ready to assist with your medical questions."
+    except Exception as e:
+        traceback.print_exc()
+        return "I am ready to assist with your medical questions."
+
+
 @app.route("/voice_chat", methods=["POST"])
 def voice_chat():
     """Called by voice_worker.py — no login required (internal agent process)."""
