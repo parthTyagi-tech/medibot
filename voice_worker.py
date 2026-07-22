@@ -390,6 +390,5 @@ if __name__ == "__main__":
             prewarm_fnc=prewarm,
             agent_name="medical-agent",
             initialize_process_timeout=120.0,
-            num_initializing_processes=2,
         )
     )
