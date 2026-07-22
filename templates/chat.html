@@ -438,6 +438,14 @@
             // Trigger reactive Three.js pulse when sending message
             if (window.triggerSpherePulse) window.triggerSpherePulse(1.5, 8.0);
 
+            // If Voice mode is active, also send text to LiveKit agent so it speaks the answer
+            if (voiceActive && livekitRoom) {
+                try {
+                    const payload = new TextEncoder().encode(JSON.stringify({ type: "user_text", text: text }));
+                    await livekitRoom.localParticipant.publishData(payload, { reliable: true, topic: "mediassist.user_text" });
+                } catch (e) { console.error("LiveKit publishData user_text error:", e); }
+            }
+
             try {
                 const formData = new FormData();
                 formData.append("msg", text);

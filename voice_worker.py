@@ -262,6 +262,20 @@ class MedicalAgent(Agent):
             destination_identities=dest,
         )
 
+    async def process_user_prompt(self, user_text: str) -> None:
+        user_text = (user_text or "").strip()
+        if not user_text:
+            return
+
+        print(f"USER SAID: {user_text}")
+        await self.send_text_to_room(user_text, role="user")
+
+        bot_response = await self.ask_backend(user_text, user_id=self._user_id())
+        print(f"BOT REPLY: {bot_response[:120]}...")
+
+        await self.send_text_to_room(bot_response, role="assistant")
+        await self.session.say(bot_response, allow_interruptions=True)
+
     async def on_enter(self) -> None:
         print("AGENT ENTERED")
         ctx = get_job_context()
@@ -272,9 +286,16 @@ class MedicalAgent(Agent):
         except Exception as e:
             print(f"wait_for_participant warning: {e}")
 
-        # ✅ FIX: Call directly instead of registering as async .on() callback.
-        # LiveKit's .on() does not accept async functions — on_enter is already
-        # async so we can await on_session_start() here directly.
+        # Listen for client data packets (typed text or prompt clicks in voice mode)
+        @self._room().on("data_received")
+        def _on_data(data_packet):
+            try:
+                payload = json.loads(data_packet.data.decode("utf-8"))
+                if payload.get("type") == "user_text" and payload.get("text"):
+                    asyncio.create_task(self.process_user_prompt(payload["text"]))
+            except Exception:
+                pass
+
         await self.on_session_start()
 
     async def on_session_start(self) -> None:
@@ -289,34 +310,7 @@ class MedicalAgent(Agent):
     ) -> None:
         user_text = new_message.text_content or ""
         if user_text:
-            print(f"USER SAID: {user_text}")
-            await self.send_text_to_room(user_text, role="user")
-
-    async def llm_node(
-        self,
-        chat_ctx: llm.ChatContext,
-        tools: list[llm.Tool],
-        model_settings: ModelSettings,
-    ):
-        user_text = ""
-        for item in reversed(chat_ctx.items):
-            if isinstance(item, llm.ChatMessage) and item.role == "user":
-                user_text = item.text_content or ""
-                break
-
-        if not user_text:
-            print("WARNING: empty user_text in llm_node")
-            return
-
-        print(f"Streaming voice reply for: '{user_text}'")
-        full_reply = []
-        async for chunk in self.stream_backend(user_text, user_id=self._user_id()):
-            yield chunk
-            full_reply.append(chunk)
-
-        bot_response = "".join(full_reply)
-        print(f"BOT REPLY (full): {bot_response[:120]}...")
-        await self.send_text_to_room(bot_response, role="assistant")
+            asyncio.create_task(self.process_user_prompt(user_text))
 
 
 async def entrypoint(ctx: JobContext):
