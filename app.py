@@ -959,6 +959,17 @@ def voice_chat():
     return Response(stream_with_context(g()), mimetype="text/plain")
 
 
+def _normalize_livekit_url(url: str) -> str:
+    url = (url or "").strip()
+    if not url:
+        return "wss://localhost:7880"
+    if url.startswith("https://"):
+        return "wss://" + url[8:]
+    elif url.startswith("http://"):
+        return "ws://" + url[7:]
+    return url
+
+
 @app.route("/livekit_token", methods=["GET"])
 @login_required
 def livekit_token_route():
@@ -982,7 +993,7 @@ def livekit_token_route():
             agent_metadata=str(current_user.id),
         )
 
-        livekit_url = os.getenv("LIVEKIT_URL", "wss://localhost:7880")
+        livekit_url = _normalize_livekit_url(os.getenv("LIVEKIT_URL", "wss://localhost:7880"))
 
         return jsonify({
             "token":   token,
@@ -1007,7 +1018,7 @@ def dispatch_agent():
     language  = data.get("language", "en").strip()
     user_id   = str(current_user.id)
 
-    livekit_url        = os.getenv("LIVEKIT_URL",        "").strip()
+    livekit_url        = _normalize_livekit_url(os.getenv("LIVEKIT_URL", ""))
     livekit_api_key    = os.getenv("LIVEKIT_API_KEY",    "").strip()
     livekit_api_secret = os.getenv("LIVEKIT_API_SECRET", "").strip()
 

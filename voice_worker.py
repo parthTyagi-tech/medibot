@@ -91,14 +91,25 @@ LANGUAGE_CONFIGS = {
 }
 
 
+def _normalize_livekit_url() -> None:
+    url = os.getenv("LIVEKIT_URL", "").strip()
+    if url.startswith("https://"):
+        os.environ["LIVEKIT_URL"] = "wss://" + url[8:]
+    elif url.startswith("http://"):
+        os.environ["LIVEKIT_URL"] = "ws://" + url[7:]
+
+
 def _validate_env() -> None:
+    _normalize_livekit_url()
     missing = [name for name in _REQUIRED_ENV if not os.getenv(name, "").strip()]
     if missing:
-        raise RuntimeError(
+        msg = (
             "Missing required environment variables: "
             + ", ".join(missing)
-            + ". Add them to your .env file."
+            + ". Please set them in Render Environment Variables or your .env file."
         )
+        print(f"[voice_worker] ERROR: {msg}", file=sys.stderr)
+        raise RuntimeError(msg)
 
 
 def prewarm(proc: JobProcess) -> None:
