@@ -38,6 +38,23 @@ _REQUIRED_ENV = (
     "GROQ_API_KEY",
 )
 
+def is_prompt_injection(user_input: str) -> bool:
+    if not user_input:
+        return False
+    text = user_input.lower()
+    blocked_phrases = [
+        "ignore previous", "ignore all previous", "system override",
+        "developer mode", "you are no longer", "disregard instructions",
+        "new persona", "system prompt", "forget everything",
+        "bypass rules", "do not follow", "dan (", "dan mode"
+    ]
+    for phrase in blocked_phrases:
+        if phrase in text:
+            return True
+    return False
+
+# ==============================================================================
+
 LANGUAGE_CONFIGS = {
     "en": {
         "stt_lang": "en-US",
@@ -270,7 +287,11 @@ class MedicalAgent(Agent):
         print(f"USER SAID: {user_text}")
         await self.send_text_to_room(user_text, role="user")
 
-        bot_response = await self.ask_backend(user_text, user_id=self._user_id())
+        if is_prompt_injection(user_text):
+            bot_response = "I cannot fulfill this request. I am a medical AI assistant, and my instructions cannot be overridden."
+        else:
+            bot_response = await self.ask_backend(user_text, user_id=self._user_id())
+            
         print(f"BOT REPLY: {bot_response[:120]}...")
 
         await self.send_text_to_room(bot_response, role="assistant")
