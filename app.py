@@ -91,7 +91,11 @@ app.secret_key = os.getenv("SECRET_KEY", "fallback-secret")
 if os.getenv("SERVER_NAME"):
     app.config["SERVER_NAME"] = os.getenv("SERVER_NAME")
 
-app.config["SQLALCHEMY_DATABASE_URI"]        = "sqlite:///users.db"
+db_url = os.getenv("DATABASE_URL", "sqlite:///users.db")
+if db_url.startswith("postgres://"):
+    db_url = db_url.replace("postgres://", "postgresql://", 1)
+
+app.config["SQLALCHEMY_DATABASE_URI"]        = db_url
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
 db.init_app(app)
