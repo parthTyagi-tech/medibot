@@ -412,22 +412,11 @@ def generate_voice_response(msg, user=None):
         response  = rag_chain.invoke({"input": msg})
         answer    = response.get("answer", "Sorry, I couldn't generate a response.")
 
-    elif intent == "memory_recall":
-        memory_prompt = f"User Memory:\n{user_memory}\n\nConversation History:\n{history_text}\n\nUser:\n{msg}"
-        answer = chatModel.invoke(memory_prompt).content
-
-    elif intent == "greeting":
-        answer = chatModel.invoke(f"Reply naturally to: {msg}").content
-
     elif intent == "account_action":
         answer = "Please use the account controls available in the application."
 
-    elif intent == "general_chat":
-        general_prompt = f"Conversation History:\n{history_text}\n\nUser:\n{msg}"
-        answer = chatModel.invoke(general_prompt).content
-
     else:
-        answer = chatModel.invoke(msg).content
+        answer = chatModel.invoke(dynamic_prompt.format_messages(input=msg, context="")).content
 
     bot_msg = Message(session_id=chat_session.id, role="assistant", content=answer)
     db.session.add(bot_msg)
@@ -793,22 +782,11 @@ def chat():
             response  = rag_chain.invoke({"input": msg})
             answer    = response.get("answer", "Sorry, I couldn't generate a response.")
 
-        elif intent == "memory_recall":
-            memory_prompt = f"User Memory:\n{user_memory}\n\nConversation History:\n{history_text}\n\nUser:\n{msg}"
-            answer = chatModel.invoke(memory_prompt).content
-
-        elif intent == "greeting":
-            answer = chatModel.invoke(f"Reply naturally to: {msg}").content
-
         elif intent == "account_action":
              answer = "Please use the account controls available in the application."
 
-        elif intent == "general_chat":
-            general_prompt = f"Conversation History:\n{history_text}\n\nUser:\n{msg}"
-            answer = chatModel.invoke(general_prompt).content
-
         else:
-            answer = chatModel.invoke(msg).content
+            answer = chatModel.invoke(dynamic_prompt.format_messages(input=msg, context="")).content
 
         bot_msg = Message(session_id=chat_session.id, role="assistant", content=answer)
         db.session.add(bot_msg)

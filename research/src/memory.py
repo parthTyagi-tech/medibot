@@ -32,9 +32,10 @@ Current User Memory:
 {context_str}Latest User Message:
 {latest_message}
 
-Your job is to update the user's MEDICAL long-term memory ONLY.
+Your job is to update the user's long-term memory.
 
 Store ONLY:
+- The user's name and personal details
 - Symptoms mentioned
 - Medical conditions
 - Allergies
@@ -42,13 +43,12 @@ Store ONLY:
 - Health concerns
 - Age, weight, blood type if mentioned
 - Doctor visits or diagnoses
+- Important preferences or context
 
 Do NOT store:
 - Greetings or small talk
-- Projects, hobbies, interests
-- Music, food, entertainment preferences
 - Jokes or casual conversation
-- Anything unrelated to health/medicine
+- Transient details that don't matter long-term
 
 Rules:
 - Keep memory concise.
