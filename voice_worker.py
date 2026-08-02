@@ -28,6 +28,8 @@ from livekit.plugins import deepgram, groq, silero
 
 load_dotenv()
 
+logger = logging.getLogger("medical-agent")
+
 _port = os.getenv("PORT", "5050").strip()
 BACKEND_URL = os.getenv("VOICE_BACKEND_URL", f"http://127.0.0.1:{_port}").rstrip("/")
 
@@ -126,7 +128,7 @@ def _validate_env() -> None:
             + ", ".join(missing)
             + ". Please set them in Render Environment Variables or your .env file."
         )
-        print(f"[voice_worker] ERROR: {msg}", file=sys.stderr)
+        logger.error(f"[voice_worker] ERROR: {msg}")
         raise RuntimeError(msg)
 
 
@@ -220,7 +222,7 @@ class MedicalAgent(Agent):
                 ) as resp:
                     if resp.status != 200:
                         text = await resp.text()
-                        print(f"Backend HTTP {resp.status}: {text[:200]}")
+                        logger.error(f"Backend HTTP {resp.status}: {text[:200]}")
                         return "Sorry, the medical backend returned an error."
                     data = await resp.json()
                     return data.get(
@@ -228,7 +230,7 @@ class MedicalAgent(Agent):
                         "Sorry, I couldn't get an answer.",
                     )
         except Exception as e:
-            print(f"Backend error: {e}")
+            logger.error(f"Backend error: {e}")
             return (
                 "Sorry, I couldn't reach the medical backend."
             )
@@ -246,7 +248,7 @@ class MedicalAgent(Agent):
                 ) as resp:
                     if resp.status != 200:
                         text = await resp.text()
-                        print(f"Backend HTTP {resp.status}: {text[:200]}")
+                        logger.error(f"Backend HTTP {resp.status}: {text[:200]}")
                         yield "Sorry, the medical backend returned an error."
                         return
 
@@ -254,7 +256,7 @@ class MedicalAgent(Agent):
                         if chunk:
                             yield chunk.decode("utf-8")
         except Exception as e:
-            print(f"Backend stream error: {e}")
+            logger.error(f"Backend stream error: {e}")
             yield "Sorry, I couldn't reach the medical backend."
 
     async def send_text_to_room(
@@ -285,7 +287,7 @@ class MedicalAgent(Agent):
         if not user_text:
             return
 
-        print(f"USER SAID: {user_text}")
+        logger.info(f"USER SAID: {user_text}")
         await self.send_text_to_room(user_text, role="user")
 
         if is_prompt_injection(user_text):
@@ -293,13 +295,13 @@ class MedicalAgent(Agent):
         else:
             bot_response = await self.ask_backend(user_text, user_id=self._user_id())
             
-        print(f"BOT REPLY: {bot_response[:120]}...")
+        logger.info(f"BOT REPLY: {bot_response[:120]}...")
 
         await self.send_text_to_room(bot_response, role="assistant")
         await self.session.say(bot_response, allow_interruptions=True)
 
     async def on_enter(self) -> None:
-        print("AGENT ENTERED")
+        logger.info("AGENT ENTERED")
         room = self._room()
 
         # Try to find user identity from remote participants immediately, or wait up to 3s
@@ -322,9 +324,9 @@ class MedicalAgent(Agent):
 
         if participant:
             self._user_identity = participant.identity
-            print(f"USER JOINED: {participant.identity}")
+            logger.info(f"USER JOINED: {participant.identity}")
         else:
-            print("No remote participant detected on enter")
+            logger.warning("No remote participant detected on enter")
 
         # Listen for client data packets (typed text or prompt clicks in voice mode)
         @self._room().on("data_received")
@@ -339,7 +341,7 @@ class MedicalAgent(Agent):
         await self.on_session_start()
 
     async def on_session_start(self) -> None:
-        print("SESSION STARTED")
+        logger.info("SESSION STARTED")
         await self.send_text_to_room(self.greeting, role="assistant")
         await self.session.say(self.greeting, allow_interruptions=True)
 
@@ -355,10 +357,7 @@ class MedicalAgent(Agent):
 
 
 async def entrypoint(ctx: JobContext):
-    print("=" * 50)
-    print("ENTRYPOINT STARTED")
-    print("ROOM:", ctx.room.name)
-    print("=" * 50)
+    logger.info(f"ENTRYPOINT STARTED - ROOM: {ctx.room.name}")
 
     ctx.log_context_fields = {"room": ctx.room.name}
 
@@ -366,7 +365,7 @@ async def entrypoint(ctx: JobContext):
 
     vad = ctx.proc.userdata.get("vad")
     if vad is None:
-        print("Loading VAD in job (prewarm miss)...")
+        logger.info("Loading VAD in job (prewarm miss)...")
         vad = silero.VAD.load(
             min_speech_duration=0.25,
             min_silence_duration=0.5,
@@ -379,7 +378,7 @@ async def entrypoint(ctx: JobContext):
         lang = "en"
     
     config = LANGUAGE_CONFIGS[lang]
-    print(f"Configuring voice channel for language: {lang}")
+    logger.info(f"Configuring voice channel for language: {lang}")
 
     session = AgentSession(
         stt=deepgram.STT(model=config["stt_model"], language=config["stt_lang"]),
@@ -394,11 +393,11 @@ async def entrypoint(ctx: JobContext):
     @session.on("user_input_transcribed")
     def _on_transcribed(ev) -> None:
         suffix = " (final)" if ev.is_final else ""
-        print(f"STT{suffix}: {ev.transcript}")
+        logger.info(f"STT{suffix}: {ev.transcript}")
 
     @session.on("agent_state_changed")
     def _on_agent_state(ev) -> None:
-        print(f"AGENT STATE: {ev.old_state} -> {ev.new_state}")
+        logger.info(f"AGENT STATE: {ev.old_state} -> {ev.new_state}")
 
     await session.start(
         room=ctx.room,
