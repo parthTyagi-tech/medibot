@@ -21,6 +21,7 @@ from livekit.agents import (
     WorkerOptions,
     cli,
     get_job_context,
+    StopResponse,
 )
 from livekit.agents import llm, room_io, ModelSettings, TurnHandlingOptions
 from livekit.plugins import deepgram, groq, silero
@@ -299,13 +300,31 @@ class MedicalAgent(Agent):
 
     async def on_enter(self) -> None:
         print("AGENT ENTERED")
-        ctx = get_job_context()
-        try:
-            participant = await ctx.wait_for_participant()
+        room = self._room()
+
+        # Try to find user identity from remote participants immediately, or wait up to 3s
+        participant = None
+        for p in room.remote_participants.values():
+            participant = p
+            break
+
+        if not participant:
+            try:
+                for _ in range(30):
+                    await asyncio.sleep(0.1)
+                    for p in room.remote_participants.values():
+                        participant = p
+                        break
+                    if participant:
+                        break
+            except Exception:
+                pass
+
+        if participant:
             self._user_identity = participant.identity
             print(f"USER JOINED: {participant.identity}")
-        except Exception as e:
-            print(f"wait_for_participant warning: {e}")
+        else:
+            print("No remote participant detected on enter")
 
         # Listen for client data packets (typed text or prompt clicks in voice mode)
         @self._room().on("data_received")
@@ -332,6 +351,7 @@ class MedicalAgent(Agent):
         user_text = new_message.text_content or ""
         if user_text:
             asyncio.create_task(self.process_user_prompt(user_text))
+        raise StopResponse()
 
 
 async def entrypoint(ctx: JobContext):
@@ -364,7 +384,6 @@ async def entrypoint(ctx: JobContext):
     session = AgentSession(
         stt=deepgram.STT(model=config["stt_model"], language=config["stt_lang"]),
         vad=vad,
-        llm=groq.LLM(model="llama-3.3-70b-versatile"),
         tts=deepgram.TTS(model=config["tts_model"]),
         aec_warmup_duration=2.0,
         turn_handling=TurnHandlingOptions(
