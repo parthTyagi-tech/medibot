@@ -538,8 +538,67 @@ def forgot_password():
         def send_async_email(app, msg):
             with app.app_context():
                 try:
-                    mail.send(msg)
-                    app.logger.info("OTP email sent successfully to %s", email)
+                    resend_key = os.getenv("RESEND_API_KEY")
+                    sendgrid_key = os.getenv("SENDGRID_API_KEY")
+
+                    if resend_key:
+                        app.logger.info("Using Resend HTTP API to send email")
+                        import urllib.request
+                        import json
+
+                        url = "https://api.resend.com/emails"
+                        headers = {
+                            "Authorization": f"Bearer {resend_key}",
+                            "Content-Type": "application/json"
+                        }
+                        payload = {
+                            "from": "MediAssist <onboarding@resend.dev>",
+                            "to": msg.recipients,
+                            "subject": msg.subject,
+                            "html": msg.html
+                        }
+
+                        req = urllib.request.Request(
+                            url,
+                            data=json.dumps(payload).encode("utf-8"),
+                            headers=headers,
+                            method="POST"
+                        )
+                        with urllib.request.urlopen(req) as response:
+                            resp_data = response.read().decode("utf-8")
+                            app.logger.info("Resend HTTP API Success: %s", resp_data)
+
+                    elif sendgrid_key:
+                        app.logger.info("Using SendGrid HTTP API to send email")
+                        import urllib.request
+                        import json
+
+                        url = "https://api.sendgrid.com/v3/mail/send"
+                        headers = {
+                            "Authorization": f"Bearer {sendgrid_key}",
+                            "Content-Type": "application/json"
+                        }
+                        payload = {
+                            "personalizations": [{"to": [{"email": r} for r in msg.recipients]}],
+                            "from": {"email": "parthtyagi3389@gmail.com"},
+                            "subject": msg.subject,
+                            "content": [{"type": "text/html", "value": msg.html}]
+                        }
+
+                        req = urllib.request.Request(
+                            url,
+                            data=json.dumps(payload).encode("utf-8"),
+                            headers=headers,
+                            method="POST"
+                        )
+                        with urllib.request.urlopen(req) as response:
+                            app.logger.info("SendGrid HTTP API Success")
+
+                    else:
+                        app.logger.info("Falling back to Flask-Mail SMTP")
+                        mail.send(msg)
+                        app.logger.info("SMTP email sent successfully to %s", email)
+
                 except Exception as e:
                     app.logger.error("OTP email error: %s", e)
         
