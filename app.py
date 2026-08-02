@@ -513,7 +513,7 @@ def forgot_password():
 
         otp = f"{secrets.randbelow(900000) + 100000}"
         user.reset_otp  = otp
-        user.otp_expiry = datetime.utcnow() + timedelta(minutes=10)
+        user.otp_expiry = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(minutes=10)
         db.session.commit()
 
         msg      = MailMessage(
@@ -539,9 +539,9 @@ def forgot_password():
             with app.app_context():
                 try:
                     mail.send(msg)
-                    print("EMAIL SENT SUCCESSFULLY")
+                    app.logger.info("OTP email sent successfully to %s", email)
                 except Exception as e:
-                    print("EMAIL ERROR:", e)
+                    app.logger.error("OTP email error: %s", e)
         
         threading.Thread(target=send_async_email, args=(app, msg), daemon=True).start()
         
@@ -572,7 +572,7 @@ def verify_otp(email):
                 error="No active OTP found. Please request a new code.",
             )
 
-        if user.otp_expiry <= datetime.utcnow():
+        if user.otp_expiry <= datetime.now(timezone.utc).replace(tzinfo=None):
             user.reset_otp = None
             user.otp_expiry = None
             db.session.commit()
@@ -603,7 +603,7 @@ def reset_password(email):
     ):
         return redirect(url_for("forgot_password"))
 
-    if not user.otp_expiry or user.otp_expiry <= datetime.utcnow():
+    if not user.otp_expiry or user.otp_expiry <= datetime.now(timezone.utc).replace(tzinfo=None):
         user.reset_otp = None
         user.otp_expiry = None
         db.session.commit()
