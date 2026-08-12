@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "stitch": {
+      "command": "powershell",
+      "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "d:/1.Projects/Medical Chat Bot/.agents/start_stitch.ps1"]
+    }
+  }
+}

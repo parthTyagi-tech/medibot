@@ -1355,6 +1355,58 @@ a:hover { text-decoration: underline; }
 /* ==========================================================================
    Responsive
    ========================================================================== */
+/* ==========================================================================
+   Responsive & Mobile Optimization
+   ========================================================================== */
+body {
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
+}
+
+.sidebar-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(2px);
+  z-index: 4999;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+/* Responsive tables, images, pre blocks inside bubble */
+.bubble table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 12px 0;
+  font-size: 13px;
+  display: block;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.bubble th, .bubble td {
+  border: 1px solid var(--border-primary);
+  padding: 8px 10px;
+  text-align: left;
+}
+.bubble th {
+  background: var(--bg-hover);
+  font-weight: 600;
+}
+.bubble img {
+  max-width: 100%;
+  height: auto;
+  border-radius: var(--radius-sm);
+  margin: 8px 0;
+}
+.bubble pre {
+  max-width: 100%;
+  box-sizing: border-box;
+  overflow-x: auto;
+}
+
 @media (max-width: 768px) {
   .sidebar {
     position: fixed;
@@ -1362,7 +1414,13 @@ a:hover { text-decoration: underline; }
     z-index: 5000;
     transition: left 0.3s ease;
   }
-  .sidebar.open { left: 0; }
+  .sidebar.open {
+    left: 0;
+  }
+  .sidebar.open + .sidebar-overlay {
+    display: block;
+    opacity: 1;
+  }
 
   .suggestion-grid {
     grid-template-columns: 1fr;
@@ -1376,4 +1434,57 @@ a:hover { text-decoration: underline; }
   .language-select { display: none; }
 
   .header-user .sidebar-user-name { display: none; }
+}
+
+@media (max-width: 480px) {
+  .auth-page {
+    padding: 24px 16px;
+  }
+  .auth-card {
+    padding: 0 8px;
+  }
+  .input-area {
+    padding: 8px 12px 12px;
+  }
+  .input-wrap {
+    padding: 6px 6px 6px 12px;
+  }
+  .chat-input {
+    font-size: 13px;
+  }
+  .modal-card {
+    padding: 20px;
+    max-height: 85vh;
+  }
+}
+
+@media (max-width: 420px) {
+  .otp-group {
+    gap: 6px;
+  }
+  .otp-box {
+    width: 40px;
+    height: 48px;
+    font-size: 18px;
+  }
+}
+
+@media (max-width: 360px) {
+  .chat-header {
+    padding: 0 8px;
+  }
+  .header-left {
+    gap: 6px;
+  }
+  .header-actions {
+    gap: 2px;
+  }
+  .btn-icon {
+    width: 32px;
+    height: 32px;
+  }
+  .voice-btn {
+    padding: 0 8px;
+    height: 32px;
+  }
 }
