@@ -139,6 +139,21 @@ def generate_voice_response(msg: str, user=None) -> str:
     try:
         logger.info(f"[generate_voice_response] START — msg='{msg[:60]}', user_id={getattr(user, 'id', None)}")
 
+        # 1. Run Input Guardrails (Prompt injection, Content safety, Medical emergency)
+        is_blocked, category, guard_msg = app.apply_input_guardrails(msg)
+        if is_blocked:
+            logger.info(f"[generate_voice_response] Blocked by guardrail ({category})")
+            if category == "medical_emergency" and user:
+                try:
+                    chat_session = get_active_session_for_user(user.id)
+                    user_msg = Message(session_id=chat_session.id, role="user", content=msg)
+                    bot_msg = Message(session_id=chat_session.id, role="assistant", content=guard_msg)
+                    db.session.add_all([user_msg, bot_msg])
+                    db.session.commit()
+                except Exception:
+                    pass
+            return guard_msg
+
         logger.info(f"[generate_voice_response] Step 1: Classifying intent...")
         intent = app.classify_intent(app.classifierModel, msg)
         logger.info(f"[generate_voice_response] Step 1: Intent = '{intent}'")
@@ -156,19 +171,20 @@ def generate_voice_response(msg: str, user=None) -> str:
 
         answer = ""
         if intent == "medical_query":
-            logger.info(f"[generate_voice_response] Step 2: RAG retrieval from Pinecone...")
+            logger.info(f"[generate_voice_response] Step 2: RAG retrieval from Pinecone (The Gale Encyclopedia)...")
             docs = app.retriever.invoke(msg)
             context = "\n\n".join([doc.page_content for doc in docs])
             logger.info(f"[generate_voice_response] Step 2: Retrieved {len(docs)} docs, invoking chatModel...")
             formatted_prompt = dynamic_prompt.format(context=context, input=msg)
             response_obj = app.chatModel.invoke(formatted_prompt)
-            answer = response_obj.content if hasattr(response_obj, "content") else str(response_obj)
+            raw_answer = response_obj.content if hasattr(response_obj, "content") else str(response_obj)
+            answer = app.apply_output_guardrails(raw_answer, is_medical=True)
             logger.info(f"[generate_voice_response] Step 2: chatModel returned ({len(answer)} chars)")
         else:
             if intent == "memory_recall":
                 prompt_val = f"User Memory:\n{user_memory}\n\nConversation History:\n{history_text}\n\nUser:\n{msg}"
             elif intent == "greeting":
-                prompt_val = f"Reply naturally to: {msg}"
+                prompt_val = f"Reply naturally and warmly to: {msg}"
             elif intent == "account_action":
                 answer = "Please use the account controls available in the application."
                 prompt_val = None
@@ -180,7 +196,8 @@ def generate_voice_response(msg: str, user=None) -> str:
             if prompt_val:
                 logger.info(f"[generate_voice_response] Step 2: Invoking chatModel for intent='{intent}'...")
                 response_obj = app.chatModel.invoke(prompt_val)
-                answer = response_obj.content if hasattr(response_obj, "content") else str(response_obj)
+                raw_answer = response_obj.content if hasattr(response_obj, "content") else str(response_obj)
+                answer = app.apply_output_guardrails(raw_answer, is_medical=False)
                 logger.info(f"[generate_voice_response] Step 2: chatModel returned ({len(answer)} chars)")
 
         if chat_session and answer:

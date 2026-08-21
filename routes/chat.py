@@ -88,8 +88,20 @@ def chat():
     if not msg:
         return "Please enter a message."
 
-    if app_module.is_prompt_injection(msg):
-        return "I cannot fulfill this request. I am MediAssist, a medical AI assistant, and my instructions cannot be overridden."
+    # 1. Run Input Guardrails (Prompt injection, Content safety, Medical emergency)
+    is_blocked, category, guard_msg = app_module.apply_input_guardrails(msg)
+    if is_blocked:
+        # If medical emergency, save user message and emergency guidance in chat history
+        if category == "medical_emergency":
+            try:
+                chat_session = get_active_session()
+                user_msg = Message(session_id=chat_session.id, role="user", content=msg)
+                bot_msg = Message(session_id=chat_session.id, role="assistant", content=guard_msg)
+                db.session.add_all([user_msg, bot_msg])
+                db.session.commit()
+            except Exception:
+                pass
+        return guard_msg
 
     intent = app_module.classify_intent(app_module.classifierModel, msg)
     print("=" * 50)
@@ -130,13 +142,15 @@ def chat():
             question_answer_chain = create_stuff_documents_chain(app_module.chatModel, dynamic_prompt)
             rag_chain = create_retrieval_chain(app_module.retriever, question_answer_chain)
             response  = rag_chain.invoke({"input": msg})
-            answer    = response.get("answer", "Sorry, I couldn't generate a response.")
+            raw_answer = response.get("answer", "Sorry, I couldn't generate a response.")
+            answer = app_module.apply_output_guardrails(raw_answer, is_medical=True)
 
         elif intent == "account_action":
-             answer = "Please use the account controls available in the application."
+            answer = "Please use the account controls available in the application."
 
         else:
-            answer = app_module.chatModel.invoke(dynamic_prompt.format_messages(input=msg, context="")).content
+            raw_answer = app_module.chatModel.invoke(dynamic_prompt.format_messages(input=msg, context="")).content
+            answer = app_module.apply_output_guardrails(raw_answer, is_medical=False)
 
         bot_msg = Message(session_id=chat_session.id, role="assistant", content=answer)
         db.session.add(bot_msg)

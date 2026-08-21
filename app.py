@@ -24,6 +24,9 @@ from services.ai_service import (
     classifierModel,
     retriever,
     is_prompt_injection,
+    detect_medical_emergency,
+    apply_input_guardrails,
+    apply_output_guardrails,
     build_prompt
 )
 from routes import register_routes

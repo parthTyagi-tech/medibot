@@ -1,12 +1,5 @@
 import unittest
-import sys
 from unittest.mock import MagicMock, patch
-
-# Mock heavy/external dependencies before importing app.py
-sys.modules['langchain_pinecone'] = MagicMock()
-sys.modules['langchain_groq'] = MagicMock()
-sys.modules['research.src.helper'] = MagicMock()
-sys.modules['deepgram'] = MagicMock()
 
 from app import app, db
 from research.src.auth import User, ChatSession, Message
