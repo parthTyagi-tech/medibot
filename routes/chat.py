@@ -1,0 +1,196 @@
+import threading
+import traceback
+from datetime import datetime, timezone
+
+from flask import (
+    Blueprint,
+    render_template,
+    request,
+    jsonify,
+    session,
+    current_app
+)
+from flask_login import login_required, current_user
+from langchain.chains import create_retrieval_chain
+from langchain.chains.combine_documents import create_stuff_documents_chain
+
+import app as app_module
+from research.src.auth import db, ChatSession, Message
+from research.src.memory import get_user_memory, clear_user_memory
+from deepgram_tts import text_to_speech
+from services.chat_service import (
+    get_active_session,
+    build_history_text,
+    update_memory_in_background,
+    update_title_in_background,
+    summarize_session
+)
+
+chat_bp = Blueprint("chat", __name__)
+
+
+@chat_bp.route("/", endpoint="index")
+@login_required
+def index():
+    past_sessions = ChatSession.query.filter_by(
+        user_id=current_user.id
+    ).order_by(ChatSession.updated_at.desc()).limit(10).all()
+
+    return render_template(
+        "chat.html",
+        user=current_user,
+        past_sessions=past_sessions,
+        active_session_id=session.get("chat_session_id")
+    )
+
+
+@chat_bp.route("/new_chat", methods=["POST"], endpoint="new_chat")
+@login_required
+def new_chat():
+    session_id = session.get("chat_session_id")
+    if session_id:
+        old_session = ChatSession.query.get(session_id)
+        if old_session:
+            summarize_session(old_session)
+
+    session.pop("chat_session_id", None)
+    return jsonify({"status": "ok"})
+
+
+@chat_bp.route("/load_session/<int:session_id>", methods=["GET"], endpoint="load_session")
+@login_required
+def load_session(session_id):
+    chat_session = ChatSession.query.filter_by(
+        id=session_id, user_id=current_user.id
+    ).first()
+
+    if not chat_session:
+        return jsonify({"error": "Session not found"}), 404
+
+    session["chat_session_id"] = session_id
+    print("LOADED SESSION:", session_id)
+
+    messages = Message.query.filter_by(
+        session_id=session_id
+    ).order_by(Message.created_at).all()
+
+    return jsonify({
+        "session_id": session_id,
+        "title":      chat_session.title,
+        "messages":   [{"role": m.role, "content": m.content} for m in messages]
+    })
+
+
+@chat_bp.route("/get", methods=["POST"], endpoint="chat")
+@login_required
+def chat():
+    msg = request.form.get("msg", "").strip()
+    if not msg:
+        return "Please enter a message."
+
+    if app_module.is_prompt_injection(msg):
+        return "I cannot fulfill this request. I am MediAssist, a medical AI assistant, and my instructions cannot be overridden."
+
+    intent = app_module.classify_intent(app_module.classifierModel, msg)
+    print("=" * 50)
+    print("USER:", msg)
+    print("INTENT:", intent)
+    print("=" * 50)
+
+    try:
+        chat_session = get_active_session()
+
+        user_msg = Message(session_id=chat_session.id, role="user", content=msg)
+        db.session.add(user_msg)
+        db.session.commit()
+
+        history_text  = build_history_text(chat_session)
+        user_memory   = get_user_memory(current_user)
+
+        app_obj = current_app._get_current_object()
+
+        # Trigger background memory update asynchronously (context-aware)
+        threading.Thread(
+            target=update_memory_in_background,
+            args=(app_obj, current_user.id, msg, history_text),
+            daemon=True
+        ).start()
+
+        # Trigger background title update asynchronously
+        if chat_session.title == "New Consultation":
+            threading.Thread(
+                target=update_title_in_background,
+                args=(app_obj, chat_session.id, msg),
+                daemon=True
+            ).start()
+
+        dynamic_prompt = app_module.build_prompt(history_text, user_memory)
+
+        if intent == "medical_query":
+            question_answer_chain = create_stuff_documents_chain(app_module.chatModel, dynamic_prompt)
+            rag_chain = create_retrieval_chain(app_module.retriever, question_answer_chain)
+            response  = rag_chain.invoke({"input": msg})
+            answer    = response.get("answer", "Sorry, I couldn't generate a response.")
+
+        elif intent == "account_action":
+             answer = "Please use the account controls available in the application."
+
+        else:
+            answer = app_module.chatModel.invoke(dynamic_prompt.format_messages(input=msg, context="")).content
+
+        bot_msg = Message(session_id=chat_session.id, role="assistant", content=answer)
+        db.session.add(bot_msg)
+
+        chat_session.updated_at = datetime.now(timezone.utc)
+        db.session.commit()
+
+        return answer
+
+    except Exception:
+        traceback.print_exc()
+        return "Something went wrong."
+
+
+@chat_bp.route("/delete_session/<int:session_id>", methods=["POST"], endpoint="delete_session")
+@login_required
+def delete_session(session_id):
+    chat_session = ChatSession.query.filter_by(
+        id=session_id, user_id=current_user.id
+    ).first()
+
+    if not chat_session:
+        return jsonify({"success": False}), 404
+
+    db.session.delete(chat_session)
+    db.session.commit()
+
+    if session.get("chat_session_id") == session_id:
+        session.pop("chat_session_id", None)
+
+    return jsonify({"success": True})
+
+
+@chat_bp.route("/get_memory", methods=["GET"], endpoint="get_user_memory_route")
+@login_required
+def get_user_memory_route():
+    return jsonify({"memory": get_user_memory(current_user)})
+
+
+@chat_bp.route("/clear_memory", methods=["POST"], endpoint="clear_user_memory_route")
+@login_required
+def clear_user_memory_route():
+    try:
+        clear_user_memory(current_user)
+        db.session.commit()
+        return jsonify({"status": "ok"})
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@chat_bp.route("/tts", methods=["POST"], endpoint="tts")
+@login_required
+def tts():
+    text = request.form.get("text", "")
+    filename = text_to_speech(text)
+    return jsonify({"audio_url": f"/{filename}"})
