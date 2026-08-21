@@ -4,10 +4,16 @@ import time
 import subprocess
 import threading
 
-# Gunicorn performance & timeout settings
+# Gunicorn performance & memory optimization for 512MB RAM containers
+workers = 1
+threads = 4
+worker_class = "gthread"
 timeout = 120
 graceful_timeout = 30
 keepalive = 5
+max_requests = 500
+max_requests_jitter = 50
+
 
 _worker_process = None
 _supervisor_thread = None

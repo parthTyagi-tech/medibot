@@ -9,18 +9,27 @@ import time
 
 class LocalEmbeddings:
     """
-    High-performance, reliable embedding generator using sentence-transformers/all-MiniLM-L6-v2.
-    First tries langchain_huggingface HuggingFaceEmbeddings / SentenceTransformer (local, 0ms network latency),
-    with fallback to HuggingFace Router API if needed.
+    Ultra-lightweight, high-performance embedding generator using sentence-transformers/all-MiniLM-L6-v2.
+    Uses FastEmbed (ONNX runtime, <30MB RAM, zero PyTorch footprint) to prevent Render 512MB OOM crashes,
+    with graceful fallbacks.
     """
 
     def __init__(self):
+        self._fastembed_model = None
         self._hf_embedder = None
+        self._cache = {}
+
+        # 1. Try ultra-lightweight FastEmbed (ONNX Runtime, no torch, ~30MB RAM)
         try:
-            from langchain_huggingface import HuggingFaceEmbeddings
-            self._hf_embedder = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+            from fastembed import TextEmbedding
+            self._fastembed_model = TextEmbedding(model_name="sentence-transformers/all-MiniLM-L6-v2")
         except Exception as e:
-            print("[Embeddings] Local HuggingFaceEmbeddings initialization notice:", e)
+            # 2. Fallback to langchain_huggingface if available
+            try:
+                from langchain_huggingface import HuggingFaceEmbeddings
+                self._hf_embedder = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+            except Exception:
+                pass
 
         self.api_urls = [
             "https://router.huggingface.co/hf-inference/models/sentence-transformers/all-MiniLM-L6-v2",
@@ -29,19 +38,32 @@ class LocalEmbeddings:
         token = os.getenv("HF_TOKEN")
         if token:
             self.headers["Authorization"] = f"Bearer {token}"
-        self._cache = {}
 
     def embed_query(self, text: str) -> List[float]:
         if not text:
             return [0.0] * 384
-        if self._hf_embedder:
-            try:
-                return self._hf_embedder.embed_query(text)
-            except Exception as e:
-                print("[Embeddings] Local embed_query fallback:", e)
 
         if text in self._cache:
             return self._cache[text]
+
+        if self._fastembed_model:
+            try:
+                embeddings = list(self._fastembed_model.embed([text]))
+                if embeddings and len(embeddings[0]) == 384:
+                    vec = [float(x) for x in embeddings[0]]
+                    self._cache[text] = vec
+                    return vec
+            except Exception as e:
+                print("[Embeddings] FastEmbed embed_query fallback:", e)
+
+        if self._hf_embedder:
+            try:
+                vec = self._hf_embedder.embed_query(text)
+                if vec and len(vec) == 384:
+                    self._cache[text] = vec
+                    return vec
+            except Exception as e:
+                print("[Embeddings] Local embed_query fallback:", e)
 
         for api_url in self.api_urls:
             try:
@@ -63,16 +85,28 @@ class LocalEmbeddings:
         return [0.0] * 384
 
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
+        if not texts:
+            return []
+
+        if self._fastembed_model:
+            try:
+                embeddings = list(self._fastembed_model.embed(texts))
+                return [[float(x) for x in emb] for emb in embeddings]
+            except Exception as e:
+                print("[Embeddings] FastEmbed embed_documents fallback:", e)
+
         if self._hf_embedder:
             try:
                 return self._hf_embedder.embed_documents(texts)
             except Exception as e:
                 print("[Embeddings] Local embed_documents fallback:", e)
+
         return [self.embed_query(t) for t in texts]
 
 
 def download_embeddings():
     return LocalEmbeddings()
+
 
 
 
