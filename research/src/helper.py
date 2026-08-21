@@ -16,7 +16,6 @@ class LocalEmbeddings:
 
     def __init__(self):
         self._fastembed_model = None
-        self._hf_embedder = None
         self._cache = {}
 
         # 1. Try ultra-lightweight FastEmbed (ONNX Runtime, no torch, ~30MB RAM)
@@ -24,12 +23,7 @@ class LocalEmbeddings:
             from fastembed import TextEmbedding
             self._fastembed_model = TextEmbedding(model_name="sentence-transformers/all-MiniLM-L6-v2")
         except Exception as e:
-            # 2. Fallback to langchain_huggingface if available
-            try:
-                from langchain_huggingface import HuggingFaceEmbeddings
-                self._hf_embedder = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
-            except Exception:
-                pass
+            print("[Embeddings] FastEmbed initialization failed:", e)
 
         self.api_urls = [
             "https://router.huggingface.co/hf-inference/models/sentence-transformers/all-MiniLM-L6-v2",
@@ -55,15 +49,6 @@ class LocalEmbeddings:
                     return vec
             except Exception as e:
                 print("[Embeddings] FastEmbed embed_query fallback:", e)
-
-        if self._hf_embedder:
-            try:
-                vec = self._hf_embedder.embed_query(text)
-                if vec and len(vec) == 384:
-                    self._cache[text] = vec
-                    return vec
-            except Exception as e:
-                print("[Embeddings] Local embed_query fallback:", e)
 
         for api_url in self.api_urls:
             try:
@@ -94,12 +79,6 @@ class LocalEmbeddings:
                 return [[float(x) for x in emb] for emb in embeddings]
             except Exception as e:
                 print("[Embeddings] FastEmbed embed_documents fallback:", e)
-
-        if self._hf_embedder:
-            try:
-                return self._hf_embedder.embed_documents(texts)
-            except Exception as e:
-                print("[Embeddings] Local embed_documents fallback:", e)
 
         return [self.embed_query(t) for t in texts]
 
