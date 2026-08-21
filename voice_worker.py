@@ -225,6 +225,7 @@ class MedicalAgent(Agent):
         last_error = None
         for url in urls_to_try:
             try:
+                logger.info(f"[ask_backend] Calling {url}/voice_chat with message='{message[:60]}...'")
                 async with aiohttp.ClientSession() as http:
                     payload = {"message": message}
                     if user_id:
@@ -232,22 +233,24 @@ class MedicalAgent(Agent):
                     async with http.post(
                         f"{url}/voice_chat",
                         json=payload,
-                        timeout=aiohttp.ClientTimeout(total=15),
+                        timeout=aiohttp.ClientTimeout(total=30),
                     ) as resp:
                         if resp.status != 200:
                             text = await resp.text()
-                            logger.error(f"Backend {url}/voice_chat HTTP {resp.status}: {text[:200]}")
+                            logger.error(f"[ask_backend] {url}/voice_chat HTTP {resp.status}: {text[:200]}")
                             continue
                         data = await resp.json()
-                        return data.get(
-                            "response",
-                            "Sorry, I couldn't get an answer.",
-                        )
+                        answer = data.get("response", "Sorry, I couldn't get an answer.")
+                        logger.info(f"[ask_backend] Got response ({len(answer)} chars): '{answer[:80]}...'")
+                        return answer
+            except asyncio.TimeoutError:
+                last_error = "HTTP request timed out after 30s"
+                logger.error(f"[ask_backend] Timeout calling {url}/voice_chat (30s)")
             except Exception as e:
                 last_error = e
-                logger.warning(f"Backend request to {url}/voice_chat failed: {e}")
+                logger.error(f"[ask_backend] Exception calling {url}/voice_chat: {e}")
 
-        logger.error(f"All backend URLs failed. Last error: {last_error}")
+        logger.error(f"[ask_backend] All backend URLs exhausted. Last error: {last_error}")
         return "Sorry, I couldn't reach the medical backend."
 
     async def stream_backend(self, message: str, user_id: str | None = None):
@@ -266,11 +269,11 @@ class MedicalAgent(Agent):
                     async with http.post(
                         f"{url}/voice_chat",
                         json=payload,
-                        timeout=aiohttp.ClientTimeout(total=15),
+                        timeout=aiohttp.ClientTimeout(total=30),
                     ) as resp:
                         if resp.status != 200:
                             text = await resp.text()
-                            logger.error(f"Backend HTTP {resp.status}: {text[:200]}")
+                            logger.error(f"[stream_backend] HTTP {resp.status}: {text[:200]}")
                             continue
 
                         async for chunk, _ in resp.content.iter_chunks():
@@ -278,7 +281,7 @@ class MedicalAgent(Agent):
                                 yield chunk.decode("utf-8")
                         return
             except Exception as e:
-                logger.warning(f"Backend stream request to {url} failed: {e}")
+                logger.error(f"[stream_backend] Request to {url} failed: {e}")
         yield "Sorry, I couldn't reach the medical backend."
 
     async def send_text_to_room(
@@ -310,27 +313,33 @@ class MedicalAgent(Agent):
         if not user_text:
             return
 
-        logger.info(f"PROCESSING USER PROMPT: {user_text}")
+        logger.info(f"[process_user_prompt] START — '{user_text}'")
         try:
+            logger.info(f"[process_user_prompt] Step 1: Publishing user transcript to room")
             await self.send_text_to_room(user_text, role="user")
 
             if is_prompt_injection(user_text):
                 bot_response = "I cannot fulfill this request. I am a medical AI assistant, and my instructions cannot be overridden."
+                logger.info(f"[process_user_prompt] Step 2: Prompt injection detected, using refusal")
             else:
+                logger.info(f"[process_user_prompt] Step 2: Calling ask_backend...")
                 bot_response = await self.ask_backend(user_text, user_id=self._user_id())
+                logger.info(f"[process_user_prompt] Step 2: Backend returned ({len(bot_response)} chars)")
 
-            logger.info(f"BOT RESPONSE: {bot_response[:120]}...")
-
+            logger.info(f"[process_user_prompt] Step 3: Publishing bot transcript to room")
             await self.send_text_to_room(bot_response, role="assistant")
+
+            logger.info(f"[process_user_prompt] Step 4: Calling session.say() for TTS...")
             await self.session.say(bot_response, allow_interruptions=True)
+            logger.info(f"[process_user_prompt] Step 5: session.say() COMPLETED — turn finished")
 
         except Exception as e:
-            logger.error(f"Error processing user prompt '{user_text}': {e}", exc_info=True)
+            logger.error(f"[process_user_prompt] EXCEPTION for '{user_text}': {e}", exc_info=True)
             try:
                 fallback_msg = "Sorry, I encountered an issue generating a response."
                 await self.session.say(fallback_msg, allow_interruptions=True)
-            except Exception:
-                pass
+            except Exception as inner_e:
+                logger.error(f"[process_user_prompt] Fallback TTS also failed: {inner_e}")
 
     async def on_enter(self) -> None:
         logger.info("AGENT ENTERED ROOM")
@@ -383,8 +392,13 @@ class MedicalAgent(Agent):
         new_message: llm.ChatMessage,
     ) -> None:
         user_text = new_message.text_content or ""
+        logger.info(f"[on_user_turn_completed] Received turn: '{user_text}'")
         if user_text:
-            asyncio.create_task(self.process_user_prompt(user_text))
+            # CRITICAL: Await process_user_prompt so session.say() completes
+            # BEFORE the turn system moves to the next turn. Fire-and-forget
+            # (create_task) causes the framework to accept the next turn while
+            # TTS is still playing, silently dropping all subsequent messages.
+            await self.process_user_prompt(user_text)
         raise StopResponse()
 
 

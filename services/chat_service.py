@@ -1,3 +1,4 @@
+import logging
 import traceback
 from datetime import datetime, timezone
 from flask import session
@@ -7,6 +8,8 @@ from langchain.chains.combine_documents import create_stuff_documents_chain
 
 from research.src.auth import db, User, ChatSession, Message
 from research.src.memory import get_user_memory, update_user_memory
+
+logger = logging.getLogger("voice-backend")
 
 
 def get_active_session():
@@ -134,7 +137,12 @@ def generate_voice_response(msg: str, user=None) -> str:
     """Generates a non-streaming voice response for voice_worker.py."""
     import app
     try:
+        logger.info(f"[generate_voice_response] START — msg='{msg[:60]}', user_id={getattr(user, 'id', None)}")
+
+        logger.info(f"[generate_voice_response] Step 1: Classifying intent...")
         intent = app.classify_intent(app.classifierModel, msg)
+        logger.info(f"[generate_voice_response] Step 1: Intent = '{intent}'")
+
         chat_session = None
         if user:
             chat_session = get_active_session_for_user(user.id)
@@ -148,11 +156,14 @@ def generate_voice_response(msg: str, user=None) -> str:
 
         answer = ""
         if intent == "medical_query":
+            logger.info(f"[generate_voice_response] Step 2: RAG retrieval from Pinecone...")
             docs = app.retriever.invoke(msg)
             context = "\n\n".join([doc.page_content for doc in docs])
+            logger.info(f"[generate_voice_response] Step 2: Retrieved {len(docs)} docs, invoking chatModel...")
             formatted_prompt = dynamic_prompt.format(context=context, input=msg)
             response_obj = app.chatModel.invoke(formatted_prompt)
             answer = response_obj.content if hasattr(response_obj, "content") else str(response_obj)
+            logger.info(f"[generate_voice_response] Step 2: chatModel returned ({len(answer)} chars)")
         else:
             if intent == "memory_recall":
                 prompt_val = f"User Memory:\n{user_memory}\n\nConversation History:\n{history_text}\n\nUser:\n{msg}"
@@ -167,8 +178,10 @@ def generate_voice_response(msg: str, user=None) -> str:
                 prompt_val = msg
 
             if prompt_val:
+                logger.info(f"[generate_voice_response] Step 2: Invoking chatModel for intent='{intent}'...")
                 response_obj = app.chatModel.invoke(prompt_val)
                 answer = response_obj.content if hasattr(response_obj, "content") else str(response_obj)
+                logger.info(f"[generate_voice_response] Step 2: chatModel returned ({len(answer)} chars)")
 
         if chat_session and answer:
             bot_msg = Message(session_id=chat_session.id, role="assistant", content=answer)
@@ -176,7 +189,10 @@ def generate_voice_response(msg: str, user=None) -> str:
             chat_session.updated_at = datetime.now(timezone.utc)
             db.session.commit()
 
-        return answer or "I am ready to assist with your medical questions."
+        final_answer = answer or "I am ready to assist with your medical questions."
+        logger.info(f"[generate_voice_response] DONE — returning ({len(final_answer)} chars): '{final_answer[:80]}...'")
+        return final_answer
     except Exception as e:
-        traceback.print_exc()
+        logger.error(f"[generate_voice_response] EXCEPTION: {e}", exc_info=True)
         return "I am ready to assist with your medical questions."
+
