@@ -79,28 +79,29 @@ retriever = CustomPineconeRetriever(
 
 class GeminiChatModel(BaseChatModel):
     """
-    High-performance ChatModel wrapping the official Google GenAI SDK.
-    Uses Gemini 2.5 Flash for high-speed, accurate medical responses.
+    High-performance ChatModel wrapping Google GenAI SDK & Direct REST API.
+    Uses Gemini 2.5 Flash / Gemini Flash with sub-second latency and zero external library dependency issues.
     """
     model_name: str = "gemini-2.5-flash"
     temperature: float = 0.3
+    api_key: Optional[str] = None
     _client: Any = None
 
     def __init__(self, api_key: Optional[str] = None, model_name: str = "gemini-2.5-flash", temperature: float = 0.3, **kwargs):
         super().__init__(**kwargs)
         self.model_name = model_name
         self.temperature = temperature
-        api_key = api_key or os.getenv("GEMINI_API_KEY")
-        if api_key:
+        self.api_key = api_key or os.getenv("GEMINI_API_KEY")
+        if self.api_key:
             try:
                 from google import genai
-                self._client = genai.Client(api_key=api_key)
-            except Exception as e:
-                logger.warning(f"[GeminiChatModel] Failed to initialize Google GenAI client: {e}")
+                self._client = genai.Client(api_key=self.api_key)
+            except Exception:
+                self._client = None
 
     def _generate(self, messages: List[BaseMessage], stop: Optional[List[str]] = None, **kwargs) -> ChatResult:
-        if not self._client:
-            raise RuntimeError("Gemini Client not initialized or missing GEMINI_API_KEY")
+        if not self.api_key:
+            raise RuntimeError("Missing GEMINI_API_KEY")
 
         full_text = []
         for m in messages:
@@ -116,16 +117,48 @@ class GeminiChatModel(BaseChatModel):
                 full_text.append(f"{role}:\n{content}")
 
         prompt_str = "\n".join(full_text)
-        response = self._client.models.generate_content(
-            model=self.model_name,
-            contents=prompt_str
-        )
-        msg_text = response.text or ""
-        return ChatResult(generations=[ChatGeneration(message=AIMessage(content=msg_text))])
+
+        # 1. Try Google GenAI SDK if available
+        if self._client:
+            try:
+                response = self._client.models.generate_content(
+                    model=self.model_name,
+                    contents=prompt_str
+                )
+                msg_text = response.text or ""
+                if msg_text:
+                    return ChatResult(generations=[ChatGeneration(message=AIMessage(content=msg_text))])
+            except Exception as e:
+                logger.warning(f"[Gemini SDK] Failed, trying direct REST: {e}")
+
+        # 2. Direct REST HTTPS call (zero dependency, 100% portable)
+        import requests
+        candidate_models = [self.model_name, "gemini-flash-latest", "gemma-4-31b-it"]
+        for model_id in candidate_models:
+            try:
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_id}:generateContent?key={self.api_key}"
+                payload = {
+                    "contents": [{"parts": [{"text": prompt_str}]}],
+                    "generationConfig": {"temperature": self.temperature}
+                }
+                r = requests.post(url, json=payload, timeout=15)
+                if r.status_code == 200:
+                    data = r.json()
+                    candidates = data.get("candidates", [])
+                    if candidates:
+                        parts = candidates[0].get("content", {}).get("parts", [])
+                        if parts:
+                            msg_text = parts[0].get("text", "")
+                            return ChatResult(generations=[ChatGeneration(message=AIMessage(content=msg_text))])
+            except Exception as rest_err:
+                logger.warning(f"[Gemini REST] Model {model_id} error: {rest_err}")
+
+        raise RuntimeError("All Gemini endpoints failed or exceeded quota")
 
     @property
     def _llm_type(self) -> str:
         return "google_genai"
+
 
 
 class RobustHybridChatModel(BaseChatModel):

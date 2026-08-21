@@ -23,6 +23,12 @@ langchain==0.3.26
 langchain-community==0.3.26
 langchain-core==0.3.68
 langchain-groq==0.3.2
+google-genai>=2.12.1
+google-adk>=2.6.3
+langchain-huggingface>=0.1.2
+sentence-transformers>=3.0.0
 
 pinecone==7.3.0
 psycopg2-binary==2.9.9
+requests>=2.31.0
+

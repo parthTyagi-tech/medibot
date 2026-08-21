@@ -10,8 +10,16 @@ Provides:
 import os
 import logging
 from typing import Optional, List, Dict, Any
-from google.adk import Agent
-from google import genai
+
+try:
+    from google.adk import Agent
+except Exception:
+    Agent = None
+
+try:
+    from google import genai
+except Exception:
+    genai = None
 
 from research.src.guardrails import (
     apply_input_guardrails,
@@ -20,6 +28,7 @@ from research.src.guardrails import (
 )
 
 logger = logging.getLogger("adk-agent")
+
 
 # ─────────────────────────────────────────────────────────────
 # 1. Clinical Doctor Instruction for Google ADK Agent
@@ -60,25 +69,38 @@ CLINICAL CONSULTATION PROTOCOL:
 # 2. Google ADK Medical Agent Instance
 # ─────────────────────────────────────────────────────────────
 
-def create_adk_medical_agent(api_key: Optional[str] = None) -> Agent:
+def create_adk_medical_agent(api_key: Optional[str] = None):
     """
-    Creates and configures the Google ADK Medical Agent using gemini-2.5-flash.
+    Creates and configures the Google ADK Medical Agent using gemini-flash-latest / gemini-2.5-flash.
     """
     key = api_key or os.getenv("GEMINI_API_KEY")
     if key:
         os.environ["GEMINI_API_KEY"] = key
 
-    agent = Agent(
-        name="MediAssistClinicalAgent",
-        model="gemini-2.5-flash",
-        instruction=CLINICAL_DOCTOR_INSTRUCTION,
-        description="Clinical Medical Assistant trained for doctor-patient consultation and precise medical guidance."
-    )
-    return agent
+    if Agent is not None:
+        try:
+            return Agent(
+                name="MediAssistClinicalAgent",
+                model="gemini-2.5-flash",
+                instruction=CLINICAL_DOCTOR_INSTRUCTION,
+                description="Clinical Medical Assistant trained for doctor-patient consultation and precise medical guidance."
+            )
+        except Exception as e:
+            logger.warning(f"[ADK Agent] Initialization notice: {e}")
+
+    # Fallback lightweight proxy
+    class FallbackADKAgent:
+        name = "MediAssistClinicalAgent"
+        model = "gemini-2.5-flash"
+        instruction = CLINICAL_DOCTOR_INSTRUCTION
+
+    return FallbackADKAgent()
+
 
 
 # Global ADK Agent instance
 adk_agent = create_adk_medical_agent()
+
 
 
 # ─────────────────────────────────────────────────────────────
