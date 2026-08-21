@@ -47,15 +47,15 @@ retriever = CustomPineconeRetriever(
 # ─────────────────────────────────────────────────────────────
 
 chatModel = ChatGroq(
-    model="llama-3.3-70b-versatile",
+    model="openai/gpt-oss-120b",
     groq_api_key=os.getenv("GROQ_API_KEY"),
     temperature=0.3
 )
 
 classifierModel = ChatGroq(
-    model="llama-3.1-8b-instant",
+    model="groq/compound-mini",
     groq_api_key=os.getenv("GROQ_API_KEY"),
-    temperature=0.0
+    temperature=0.1
 )
 
 # ─────────────────────────────────────────────────────────────
