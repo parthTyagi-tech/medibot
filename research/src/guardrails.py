@@ -203,6 +203,13 @@ def apply_input_guardrails(user_input: str) -> Tuple[bool, str, Optional[str]]:
 # 5. Output Safety & Medical Disclaimers
 # ─────────────────────────────────────────────────────────────
 
+NON_MEDICAL_REFUSAL = (
+    "I am MediAssist, a specialized medical AI assistant. "
+    "I am designed exclusively to assist with health, symptoms, wellness, and medical questions. "
+    "I cannot assist with non-medical topics (such as writing code, homework, or general trivia). "
+    "Please feel free to ask me any health or medical questions!"
+)
+
 MEDICAL_DISCLAIMER = (
     "\n\n---\n*Disclaimer: MediAssist provides informational medical guidance based on clinical literature "
     "(such as The Gale Encyclopedia of Medicine) and is not a substitute for professional medical diagnosis, "
@@ -228,3 +235,4 @@ def apply_output_guardrails(response_text: str, is_medical: bool = False) -> str
         cleaned += MEDICAL_DISCLAIMER
 
     return cleaned
+

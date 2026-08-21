@@ -27,6 +27,7 @@ from services.ai_service import (
     detect_medical_emergency,
     apply_input_guardrails,
     apply_output_guardrails,
+    NON_MEDICAL_REFUSAL,
     build_prompt
 )
 from routes import register_routes

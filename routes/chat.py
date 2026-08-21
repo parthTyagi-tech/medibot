@@ -145,12 +145,34 @@ def chat():
             raw_answer = response.get("answer", "Sorry, I couldn't generate a response.")
             answer = app_module.apply_output_guardrails(raw_answer, is_medical=True)
 
+        elif intent == "greeting":
+            first_name = current_user.name.split()[0] if current_user and current_user.name else "there"
+            greeting_prompt = (
+                f"You are MediAssist, an empathetic medical AI assistant. "
+                f"The user ({first_name}) said: '{msg}'. "
+                f"Reply warmly in 1-2 friendly sentences and ask how you can assist with their health, symptoms, or medical questions today."
+            )
+            raw_resp = app_module.chatModel.invoke(greeting_prompt)
+            raw_answer = raw_resp.content if hasattr(raw_resp, "content") else str(raw_resp)
+            answer = app_module.apply_output_guardrails(raw_answer, is_medical=False)
+
+        elif intent == "memory_recall":
+            recall_prompt = (
+                f"You are MediAssist. Answer the user's question about their medical history or previous discussion.\n"
+                f"User Profile & Known Medical Memory:\n{user_memory}\n\n"
+                f"Recent Conversation:\n{history_text}\n\n"
+                f"User Query: {msg}"
+            )
+            raw_resp = app_module.chatModel.invoke(recall_prompt)
+            raw_answer = raw_resp.content if hasattr(raw_resp, "content") else str(raw_resp)
+            answer = app_module.apply_output_guardrails(raw_answer, is_medical=False)
+
         elif intent == "account_action":
-            answer = "Please use the account controls available in the application."
+            answer = "Please use the account controls available in the navigation bar to manage your account or consultation history."
 
         else:
-            raw_answer = app_module.chatModel.invoke(dynamic_prompt.format_messages(input=msg, context="")).content
-            answer = app_module.apply_output_guardrails(raw_answer, is_medical=False)
+            # Non-medical query: enforce strict medical specialization
+            answer = app_module.NON_MEDICAL_REFUSAL
 
         bot_msg = Message(session_id=chat_session.id, role="assistant", content=answer)
         db.session.add(bot_msg)

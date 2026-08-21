@@ -101,6 +101,39 @@ class TestGuardrailsAndRAG(unittest.TestCase):
         self.assertGreater(len(resp), 30)
         self.assertIn("hypertension", resp.lower())
 
+    def test_curly_braces_in_history_and_memory_do_not_crash(self):
+        # Simulates user pasting raw JSON logs into chat history
+        raw_json_history = 'User: {"message": "STT: Hello", "timestamp": "2026-08-21T22:45:00Z", "level": "INFO"}\nMediAssist: Hello!'
+        raw_json_memory = '{"diagnoses": ["asthma"], "notes": {"severity": "mild"}}'
+
+        # Must not raise KeyError: '\n "timestamp"' or any template exception
+        prompt = build_prompt(raw_json_history, raw_json_memory)
+        formatted = prompt.format_messages(input="I have asthama can you do something ??", context="Asthma details.")
+        self.assertGreater(len(formatted), 0)
+        
+        # Test full chain invocation with JSON in history
+        qa_chain = create_stuff_documents_chain(chatModel, prompt)
+        rag_chain = create_retrieval_chain(retriever, qa_chain)
+        res = rag_chain.invoke({"input": "I have asthama can you do something ??"})
+        self.assertIsNotNone(res.get("answer"))
+        self.assertIn("asthma", res.get("answer").lower())
+
+    def test_non_medical_queries_refused(self):
+        from research.src.guardrails import NON_MEDICAL_REFUSAL
+        from research.src.intent_classifier import classify_intent
+        from services.ai_service import classifierModel
+
+        non_med_inputs = [
+            "can you write a python code ?",
+            "write a javascript script for me",
+            "tell me a joke about programming",
+            "what is the stock price of Apple?",
+        ]
+        for query in non_med_inputs:
+            intent = classify_intent(classifierModel, query)
+            self.assertEqual(intent, "general_chat", f"Query was not classified as general_chat: {query}")
+
 
 if __name__ == "__main__":
     unittest.main()
+

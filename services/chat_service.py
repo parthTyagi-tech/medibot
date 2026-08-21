@@ -180,25 +180,31 @@ def generate_voice_response(msg: str, user=None) -> str:
             raw_answer = response_obj.content if hasattr(response_obj, "content") else str(response_obj)
             answer = app.apply_output_guardrails(raw_answer, is_medical=True)
             logger.info(f"[generate_voice_response] Step 2: chatModel returned ({len(answer)} chars)")
+        elif intent == "greeting":
+            first_name = user.name.split()[0] if user and user.name else "there"
+            greeting_prompt = (
+                f"You are MediAssist, an empathetic medical AI assistant. "
+                f"The user ({first_name}) said: '{msg}'. "
+                f"Reply warmly in 1-2 friendly sentences and ask how you can assist with their health, symptoms, or medical questions today."
+            )
+            raw_resp = app.chatModel.invoke(greeting_prompt)
+            raw_answer = raw_resp.content if hasattr(raw_resp, "content") else str(raw_resp)
+            answer = app.apply_output_guardrails(raw_answer, is_medical=False)
+        elif intent == "memory_recall":
+            recall_prompt = (
+                f"You are MediAssist. Answer the user's question about their medical history or previous discussion.\n"
+                f"User Profile & Known Medical Memory:\n{user_memory}\n\n"
+                f"Recent Conversation:\n{history_text}\n\n"
+                f"User Query: {msg}"
+            )
+            raw_resp = app.chatModel.invoke(recall_prompt)
+            raw_answer = raw_resp.content if hasattr(raw_resp, "content") else str(raw_resp)
+            answer = app.apply_output_guardrails(raw_answer, is_medical=False)
+        elif intent == "account_action":
+            answer = "Please use the account controls available in the application."
         else:
-            if intent == "memory_recall":
-                prompt_val = f"User Memory:\n{user_memory}\n\nConversation History:\n{history_text}\n\nUser:\n{msg}"
-            elif intent == "greeting":
-                prompt_val = f"Reply naturally and warmly to: {msg}"
-            elif intent == "account_action":
-                answer = "Please use the account controls available in the application."
-                prompt_val = None
-            elif intent == "general_chat":
-                prompt_val = f"Conversation History:\n{history_text}\n\nUser:\n{msg}"
-            else:
-                prompt_val = msg
-
-            if prompt_val:
-                logger.info(f"[generate_voice_response] Step 2: Invoking chatModel for intent='{intent}'...")
-                response_obj = app.chatModel.invoke(prompt_val)
-                raw_answer = response_obj.content if hasattr(response_obj, "content") else str(response_obj)
-                answer = app.apply_output_guardrails(raw_answer, is_medical=False)
-                logger.info(f"[generate_voice_response] Step 2: chatModel returned ({len(answer)} chars)")
+            # Non-medical queries: decline politely
+            answer = app.NON_MEDICAL_REFUSAL
 
         if chat_session and answer:
             bot_msg = Message(session_id=chat_session.id, role="assistant", content=answer)
