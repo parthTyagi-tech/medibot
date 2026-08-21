@@ -28,7 +28,13 @@ from livekit.plugins import deepgram, groq, silero
 
 load_dotenv()
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    handlers=[logging.StreamHandler(sys.stdout)]
+)
 logger = logging.getLogger("medical-agent")
+logger.setLevel(logging.INFO)
 
 _port = os.getenv("PORT", "5050").strip()
 BACKEND_URL = os.getenv("VOICE_BACKEND_URL", f"http://127.0.0.1:{_port}").rstrip("/")
@@ -210,98 +216,124 @@ class MedicalAgent(Agent):
         return None
 
     async def ask_backend(self, message: str, user_id: str | None = None) -> str:
-        try:
-            async with aiohttp.ClientSession() as http:
-                payload = {"message": message}
-                if user_id:
-                    payload["user_id"] = user_id
-                async with http.post(
-                    f"{BACKEND_URL}/voice_chat",
-                    json=payload,
-                    timeout=aiohttp.ClientTimeout(total=15),
-                ) as resp:
-                    if resp.status != 200:
-                        text = await resp.text()
-                        logger.error(f"Backend HTTP {resp.status}: {text[:200]}")
-                        return "Sorry, the medical backend returned an error."
-                    data = await resp.json()
-                    return data.get(
-                        "response",
-                        "Sorry, I couldn't get an answer.",
-                    )
-        except Exception as e:
-            logger.error(f"Backend error: {e}")
-            return (
-                "Sorry, I couldn't reach the medical backend."
-            )
+        urls_to_try = [BACKEND_URL]
+        _port = os.getenv("PORT", "5050").strip()
+        fallback_url = f"http://127.0.0.1:{_port}"
+        if fallback_url not in urls_to_try:
+            urls_to_try.append(fallback_url)
+
+        last_error = None
+        for url in urls_to_try:
+            try:
+                async with aiohttp.ClientSession() as http:
+                    payload = {"message": message}
+                    if user_id:
+                        payload["user_id"] = user_id
+                    async with http.post(
+                        f"{url}/voice_chat",
+                        json=payload,
+                        timeout=aiohttp.ClientTimeout(total=15),
+                    ) as resp:
+                        if resp.status != 200:
+                            text = await resp.text()
+                            logger.error(f"Backend {url}/voice_chat HTTP {resp.status}: {text[:200]}")
+                            continue
+                        data = await resp.json()
+                        return data.get(
+                            "response",
+                            "Sorry, I couldn't get an answer.",
+                        )
+            except Exception as e:
+                last_error = e
+                logger.warning(f"Backend request to {url}/voice_chat failed: {e}")
+
+        logger.error(f"All backend URLs failed. Last error: {last_error}")
+        return "Sorry, I couldn't reach the medical backend."
 
     async def stream_backend(self, message: str, user_id: str | None = None):
-        try:
-            async with aiohttp.ClientSession() as http:
-                payload = {"message": message, "stream": True}
-                if user_id:
-                    payload["user_id"] = user_id
-                async with http.post(
-                    f"{BACKEND_URL}/voice_chat",
-                    json=payload,
-                    timeout=aiohttp.ClientTimeout(total=15),
-                ) as resp:
-                    if resp.status != 200:
-                        text = await resp.text()
-                        logger.error(f"Backend HTTP {resp.status}: {text[:200]}")
-                        yield "Sorry, the medical backend returned an error."
-                        return
+        urls_to_try = [BACKEND_URL]
+        _port = os.getenv("PORT", "5050").strip()
+        fallback_url = f"http://127.0.0.1:{_port}"
+        if fallback_url not in urls_to_try:
+            urls_to_try.append(fallback_url)
 
-                    async for chunk, _ in resp.content.iter_chunks():
-                        if chunk:
-                            yield chunk.decode("utf-8")
-        except Exception as e:
-            logger.error(f"Backend stream error: {e}")
-            yield "Sorry, I couldn't reach the medical backend."
+        for url in urls_to_try:
+            try:
+                async with aiohttp.ClientSession() as http:
+                    payload = {"message": message, "stream": True}
+                    if user_id:
+                        payload["user_id"] = user_id
+                    async with http.post(
+                        f"{url}/voice_chat",
+                        json=payload,
+                        timeout=aiohttp.ClientTimeout(total=15),
+                    ) as resp:
+                        if resp.status != 200:
+                            text = await resp.text()
+                            logger.error(f"Backend HTTP {resp.status}: {text[:200]}")
+                            continue
+
+                        async for chunk, _ in resp.content.iter_chunks():
+                            if chunk:
+                                yield chunk.decode("utf-8")
+                        return
+            except Exception as e:
+                logger.warning(f"Backend stream request to {url} failed: {e}")
+        yield "Sorry, I couldn't reach the medical backend."
 
     async def send_text_to_room(
         self,
         text: str,
         role: str = "assistant",
     ) -> None:
-        payload = json.dumps({
-            "type": "transcript",
-            "role": role,
-            "text": text,
-        }).encode("utf-8")
+        try:
+            payload = json.dumps({
+                "type": "transcript",
+                "role": role,
+                "text": text,
+            }).encode("utf-8")
 
-        dest = []
-        user_id = self._user_id()
-        if user_id:
-            dest = [user_id]
+            user_id = self._user_id()
+            dest = [user_id] if user_id else []
 
-        await self._room().local_participant.publish_data(
-            payload,
-            reliable=True,
-            topic="mediassist.transcript",
-            destination_identities=dest,
-        )
+            await self._room().local_participant.publish_data(
+                payload,
+                reliable=True,
+                topic="mediassist.transcript",
+                destination_identities=dest,
+            )
+        except Exception as e:
+            logger.warning(f"Failed to publish transcript data to room: {e}")
 
     async def process_user_prompt(self, user_text: str) -> None:
         user_text = (user_text or "").strip()
         if not user_text:
             return
 
-        logger.info(f"USER SAID: {user_text}")
-        await self.send_text_to_room(user_text, role="user")
+        logger.info(f"PROCESSING USER PROMPT: {user_text}")
+        try:
+            await self.send_text_to_room(user_text, role="user")
 
-        if is_prompt_injection(user_text):
-            bot_response = "I cannot fulfill this request. I am a medical AI assistant, and my instructions cannot be overridden."
-        else:
-            bot_response = await self.ask_backend(user_text, user_id=self._user_id())
-            
-        logger.info(f"BOT REPLY: {bot_response[:120]}...")
+            if is_prompt_injection(user_text):
+                bot_response = "I cannot fulfill this request. I am a medical AI assistant, and my instructions cannot be overridden."
+            else:
+                bot_response = await self.ask_backend(user_text, user_id=self._user_id())
 
-        await self.send_text_to_room(bot_response, role="assistant")
-        await self.session.say(bot_response, allow_interruptions=True)
+            logger.info(f"BOT RESPONSE: {bot_response[:120]}...")
+
+            await self.send_text_to_room(bot_response, role="assistant")
+            await self.session.say(bot_response, allow_interruptions=True)
+
+        except Exception as e:
+            logger.error(f"Error processing user prompt '{user_text}': {e}", exc_info=True)
+            try:
+                fallback_msg = "Sorry, I encountered an issue generating a response."
+                await self.session.say(fallback_msg, allow_interruptions=True)
+            except Exception:
+                pass
 
     async def on_enter(self) -> None:
-        logger.info("AGENT ENTERED")
+        logger.info("AGENT ENTERED ROOM")
         room = self._room()
 
         # Try to find user identity from remote participants immediately, or wait up to 3s
@@ -324,7 +356,7 @@ class MedicalAgent(Agent):
 
         if participant:
             self._user_identity = participant.identity
-            logger.info(f"USER JOINED: {participant.identity}")
+            logger.info(f"USER JOINED ROOM: {participant.identity}")
         else:
             logger.warning("No remote participant detected on enter")
 
@@ -341,7 +373,7 @@ class MedicalAgent(Agent):
         await self.on_session_start()
 
     async def on_session_start(self) -> None:
-        logger.info("SESSION STARTED")
+        logger.info("VOICE SESSION STARTED")
         await self.send_text_to_room(self.greeting, role="assistant")
         await self.session.say(self.greeting, allow_interruptions=True)
 

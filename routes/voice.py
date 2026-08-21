@@ -83,8 +83,8 @@ def voice_chat():
                 answer = generate_voice_response(msg, user=user)
             else:
                 answer = generate_voice_response(msg)
-        except Exception:
-            traceback.print_exc()
+        except Exception as e:
+            current_app.logger.error(f"[voice_chat] Error generating voice response: {e}", exc_info=True)
             answer = "Sorry, something went wrong on my end."
         return jsonify({"response": answer})
 
@@ -172,7 +172,7 @@ def voice_chat():
                 db.session.commit()
 
         except Exception as e:
-            traceback.print_exc()
+            current_app.logger.error(f"[voice_chat] Streaming error: {e}", exc_info=True)
             yield "Sorry, something went wrong on my end."
 
     return Response(stream_with_context(g()), mimetype="text/plain")
