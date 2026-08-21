@@ -39,19 +39,21 @@ def build_history_text(chat_session):
     if not messages:
         return chat_session.summary or ""
 
+    # Rolling window: keep last 6 messages for high-resolution dialogue
     history = []
-    for m in messages[-10:]:
-        role = "User" if m.role == "user" else "MediAssist"
+    for m in messages[-6:]:
+        role = "Patient" if m.role == "user" else "MediAssist"
         history.append(f"{role}: {m.content}")
 
     if chat_session.summary:
         return (
-            f"Summary of earlier conversation:\n"
+            f"Summary of Earlier Consultation Context:\n"
             f"{chat_session.summary}\n\n"
-            f"Recent messages:\n" + "\n".join(history)
+            f"Recent Consultation Dialogue:\n" + "\n".join(history)
         )
 
     return "\n".join(history)
+
 
 
 def update_session_title(chat_session, first_message):
@@ -106,22 +108,37 @@ def summarize_session(chat_session):
         return
 
     conversation = "\n".join([
-        f"{'User' if m.role == 'user' else 'MediAssist'}: {m.content}"
+        f"{'Patient' if m.role == 'user' else 'MediAssist'}: {m.content}"
         for m in messages
     ])
 
     try:
         summary_prompt = (
-            "Summarize this medical conversation "
-            "in 2-3 sentences focusing on:\n"
-            "- symptoms\n- concerns\n- advice given\n\n"
+            "Summarize this clinical patient consultation in 2-3 concise bullet points focusing on:\n"
+            "- Key symptoms reported & duration\n"
+            "- Important medical context/history\n"
+            "- Clinical advice or triage guidance provided\n\n"
             f"{conversation}\n\nSummary:"
         )
         response = app.chatModel.invoke(summary_prompt)
-        chat_session.summary = response.content
+        content = response.content if hasattr(response, "content") else str(response)
+        chat_session.summary = content.strip()
         db.session.commit()
-    except Exception:
-        pass
+    except Exception as e:
+        db.session.rollback()
+        print(f"[Summarize Session] Error: {e}")
+
+
+def summarize_session_in_background(app_instance, session_id):
+    with app_instance.app_context():
+        try:
+            chat_session = ChatSession.query.get(session_id)
+            if chat_session:
+                summarize_session(chat_session)
+                print(f"[BG Summarize] Completed for session {session_id}")
+        except Exception as e:
+            print(f"[BG Summarize] Error: {e}")
+
 
 
 def get_active_session_for_user(user_id):

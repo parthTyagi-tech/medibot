@@ -23,7 +23,8 @@ from services.chat_service import (
     build_history_text,
     update_memory_in_background,
     update_title_in_background,
-    summarize_session
+    summarize_session,
+    summarize_session_in_background
 )
 
 chat_bp = Blueprint("chat", __name__)
@@ -135,6 +136,16 @@ def chat():
                 args=(app_obj, chat_session.id, msg),
                 daemon=True
             ).start()
+
+        # Trigger background context window summarization when history reaches 6+ messages
+        msg_count = Message.query.filter_by(session_id=chat_session.id).count()
+        if msg_count >= 6 and msg_count % 4 == 0:
+            threading.Thread(
+                target=summarize_session_in_background,
+                args=(app_obj, chat_session.id),
+                daemon=True
+            ).start()
+
 
         dynamic_prompt = app_module.build_prompt(history_text, user_memory)
 
