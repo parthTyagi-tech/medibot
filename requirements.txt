@@ -23,7 +23,6 @@ langchain==0.3.26
 langchain-community==0.3.26
 langchain-core==0.3.68
 langchain-groq==0.3.2
-fastembed>=0.8.0
 
 pinecone==7.3.0
 psycopg2-binary==2.9.9
