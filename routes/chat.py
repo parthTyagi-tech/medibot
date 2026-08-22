@@ -18,6 +18,13 @@ import app as app_module
 from research.src.auth import db, ChatSession, Message
 from research.src.memory import get_user_memory, clear_user_memory
 from deepgram_tts import text_to_speech
+from research.src.clinical_triage import (
+    PatientState,
+    extract_patient_state,
+    evaluate_triage_tier,
+    check_medication_contraindications,
+    check_mid_conversation_correction
+)
 from services.chat_service import (
     get_active_session,
     build_history_text,
@@ -157,9 +164,39 @@ def chat():
             ).start()
 
 
-        dynamic_prompt = app_module.build_prompt(history_text, user_memory)
+        # Load or initialize structured patient state
+        state_dict = session.get(f"patient_state_{chat_session.id}", {})
+        patient_state = extract_patient_state(msg, PatientState.from_dict(state_dict))
 
-        if intent == "medical_query":
+        # Check for mid-conversation high-risk disclosure correction
+        correction_alert = check_mid_conversation_correction(patient_state, history_text)
+
+        # Check medication & dosing contraindications
+        dosing_blocked, dosing_refusal = check_medication_contraindications(patient_state, msg)
+
+        # Evaluate clinical triage risk tier & red-flag overrides
+        risk_tier, red_flags, override_guidance = evaluate_triage_tier(patient_state, msg)
+        patient_state.risk_tier = risk_tier
+        patient_state.red_flags = red_flags
+
+        # Save updated patient state
+        session[f"patient_state_{chat_session.id}"] = patient_state.to_dict()
+
+        # Handle Immediate Red-Flag Overrides (e.g. Febrile Neutropenia / Neonatal Fever / Emergency)
+        if override_guidance and risk_tier == "Emergency":
+            raw_answer = override_guidance
+            if correction_alert:
+                raw_answer = f"{correction_alert}\n\n{raw_answer}"
+            answer = app_module.apply_output_guardrails(raw_answer, is_medical=True, show_disclaimer=False)
+
+        elif dosing_blocked:
+            raw_answer = dosing_refusal
+            if correction_alert:
+                raw_answer = f"{correction_alert}\n\n{raw_answer}"
+            answer = app_module.apply_output_guardrails(raw_answer, is_medical=True, show_disclaimer=False)
+
+        elif intent == "medical_query":
+            dynamic_prompt = app_module.build_prompt(history_text, user_memory, patient_state=patient_state)
             try:
                 question_answer_chain = create_stuff_documents_chain(app_module.chatModel, dynamic_prompt)
                 rag_chain = create_retrieval_chain(app_module.retriever, question_answer_chain)
@@ -172,7 +209,14 @@ def chat():
                 direct_prompt = dynamic_prompt.format(context="Clinical medicine reference and Gale Encyclopedia principles.", input=msg)
                 raw_resp = app_module.chatModel.invoke(direct_prompt)
                 raw_answer = raw_resp.content if hasattr(raw_resp, "content") else str(raw_resp)
-            answer = app_module.apply_output_guardrails(raw_answer, is_medical=True)
+
+            if correction_alert:
+                raw_answer = f"{correction_alert}\n\n{raw_answer}"
+
+            show_disc = not patient_state.disclaimer_shown
+            answer = app_module.apply_output_guardrails(raw_answer, is_medical=True, show_disclaimer=show_disc)
+            patient_state.disclaimer_shown = True
+            session[f"patient_state_{chat_session.id}"] = patient_state.to_dict()
 
         elif intent == "greeting":
             first_name = current_user.name.split()[0] if current_user and current_user.name else "there"
@@ -183,7 +227,7 @@ def chat():
             )
             raw_resp = app_module.chatModel.invoke(greeting_prompt)
             raw_answer = raw_resp.content if hasattr(raw_resp, "content") else str(raw_resp)
-            answer = app_module.apply_output_guardrails(raw_answer, is_medical=False)
+            answer = app_module.apply_output_guardrails(raw_answer, is_medical=False, show_disclaimer=False)
 
         elif intent == "memory_recall":
             recall_prompt = (
@@ -194,7 +238,7 @@ def chat():
             )
             raw_resp = app_module.chatModel.invoke(recall_prompt)
             raw_answer = raw_resp.content if hasattr(raw_resp, "content") else str(raw_resp)
-            answer = app_module.apply_output_guardrails(raw_answer, is_medical=False)
+            answer = app_module.apply_output_guardrails(raw_answer, is_medical=False, show_disclaimer=False)
 
         elif intent == "account_action":
             answer = "Please use the account controls available in the navigation bar to manage your account or consultation history."

@@ -24,7 +24,11 @@ from services.ai_service import (
     classifierModel,
     retriever,
     is_prompt_injection,
-    build_prompt
+    build_prompt,
+    PatientState,
+    extract_patient_state,
+    evaluate_triage_tier,
+    check_medication_contraindications
 )
 from services.chat_service import (
     build_history_text,
@@ -123,14 +127,23 @@ def voice_chat():
                         daemon=True
                     ).start()
 
-            # 3. Setup prompt
+            # 3. Setup patient state & prompt
             history_text = build_history_text(chat_session) if chat_session else ""
             user_memory = get_user_memory(user) if user else "Voice Session"
-            dynamic_prompt = build_prompt(history_text, user_memory, user=user)
+            patient_state = extract_patient_state(msg, PatientState())
+            risk_tier, red_flags, override_guidance = evaluate_triage_tier(patient_state, msg)
+            dosing_blocked, dosing_refusal = check_medication_contraindications(patient_state, msg)
+            dynamic_prompt = build_prompt(history_text, user_memory, user=user, patient_state=patient_state)
 
             # 4. Stream response from LLM
             full_response = []
-            if intent == "medical_query":
+            if override_guidance and risk_tier == "Emergency":
+                yield override_guidance
+                full_response.append(override_guidance)
+            elif dosing_blocked:
+                yield dosing_refusal
+                full_response.append(dosing_refusal)
+            elif intent == "medical_query":
                 # Retrieve documents from Pinecone
                 try:
                     docs = retriever.invoke(msg)

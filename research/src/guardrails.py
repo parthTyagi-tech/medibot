@@ -200,7 +200,7 @@ def apply_input_guardrails(user_input: str) -> Tuple[bool, str, Optional[str]]:
 
 
 # ─────────────────────────────────────────────────────────────
-# 5. Output Safety & Medical Disclaimers
+# 5. Output Safety, Decision Support Language & Medical Disclaimers
 # ─────────────────────────────────────────────────────────────
 
 NON_MEDICAL_REFUSAL = (
@@ -211,15 +211,34 @@ NON_MEDICAL_REFUSAL = (
 )
 
 MEDICAL_DISCLAIMER = (
-    "\n\n---\n*Disclaimer: MediAssist provides informational medical guidance based on clinical literature "
-    "(such as The Gale Encyclopedia of Medicine) and is not a substitute for professional medical diagnosis, "
-    "treatment, or advice from a qualified healthcare provider.*"
+    "\n\n---\n*Disclaimer: MediAssist provides informational clinical decision-support based on authoritative medical literature "
+    "(such as The Gale Encyclopedia of Medicine, CDC, and WHO). It does not provide definitive medical diagnoses, prescriptions, "
+    "or individualized treatment plans and is not a substitute for evaluation by a qualified healthcare professional.*"
 )
 
+# Decision-support language conversions (replace diagnostic phrases with decision-support phrasing)
+DIAGNOSTIC_LANGUAGE_REPLACEMENTS = [
+    (r"\byou\s+have\s+(a\s+)?(fever|infection|pneumonia|bronchitis|strep|covid|flu|migraine|asthma)\b", r"these symptoms are commonly associated with \2"),
+    (r"\bi\s+diagnose\s+you\s+with\b", "this clinical pattern warrants evaluation for"),
+    (r"\byou\s+are\s+suffering\s+from\b", "your symptoms may suggest"),
+]
 
-def apply_output_guardrails(response_text: str, is_medical: bool = False) -> str:
+
+def enforce_decision_support_language(text: str) -> str:
     """
-    Validates and enriches output with necessary medical guardrails.
+    Ensures language remains decision-support focused rather than declaring definitive diagnoses.
+    """
+    result = text
+    for pattern, replacement in DIAGNOSTIC_LANGUAGE_REPLACEMENTS:
+        result = re.sub(pattern, replacement, result, flags=re.IGNORECASE)
+    return result
+
+
+def apply_output_guardrails(response_text: str, is_medical: bool = False, show_disclaimer: bool = True) -> str:
+    """
+    Validates and enriches output with clinical safety guardrails.
+    - show_disclaimer: If True and disclaimer is not yet present, appends clinical disclaimer.
+      If False (e.g. disclaimer already shown in session), does not spam repetitive disclaimers.
     """
     if not response_text:
         return "I am ready to assist with your medical questions."
@@ -239,10 +258,12 @@ def apply_output_guardrails(response_text: str, is_medical: bool = False) -> str
             lines = [l for l in cleaned.split("\n") if not l.strip().startswith("*")]
             cleaned = "\n".join(lines).strip() or cleaned
 
+    # Enforce non-diagnostic decision-support wording
+    cleaned = enforce_decision_support_language(cleaned)
     cleaned = cleaned.strip()
 
-    # If medical query and disclaimer not already present, append a concise disclaimer
-    if is_medical and "Disclaimer:" not in cleaned and len(cleaned) > 120:
+    # Append disclaimer once if requested and not already present
+    if is_medical and show_disclaimer and "Disclaimer:" not in cleaned and len(cleaned) > 120:
         cleaned += MEDICAL_DISCLAIMER
 
     return cleaned
