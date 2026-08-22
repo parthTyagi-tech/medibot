@@ -6,3 +6,4 @@ instance/
 *.tmp
 error.log
 static/audio/
+.fastembed_cache/

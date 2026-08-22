@@ -228,7 +228,18 @@ def apply_output_guardrails(response_text: str, is_medical: bool = False) -> str
     cleaned = re.sub(r"<\s*/?\s*(system_prompt|user_query|context|memory)\s*>", "", response_text)
     
     # Strip any raw thinking blocks if model outputted them
-    cleaned = re.sub(r"<think>[\s\S]*?</think>", "", cleaned).strip()
+    cleaned = re.sub(r"<think>[\s\S]*?</think>", "", cleaned)
+    
+    # Strip any reasoning scratchpad lines like '* User says:' if leaked
+    if cleaned.startswith("*   User says:") or cleaned.startswith("* User says:"):
+        option_match = re.search(r"\*Option \d+.*?\*:\s*(.*)", cleaned)
+        if option_match:
+            cleaned = option_match.group(1).strip()
+        else:
+            lines = [l for l in cleaned.split("\n") if not l.strip().startswith("*")]
+            cleaned = "\n".join(lines).strip() or cleaned
+
+    cleaned = cleaned.strip()
 
     # If medical query and disclaimer not already present, append a concise disclaimer
     if is_medical and "Disclaimer:" not in cleaned and len(cleaned) > 120:

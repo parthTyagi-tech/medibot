@@ -20,8 +20,13 @@ class LocalEmbeddings:
 
         # 1. Try ultra-lightweight FastEmbed (ONNX Runtime, no torch, ~30MB RAM)
         try:
+            os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
             from fastembed import TextEmbedding
-            self._fastembed_model = TextEmbedding(model_name="sentence-transformers/all-MiniLM-L6-v2")
+            cache_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), ".fastembed_cache")
+            self._fastembed_model = TextEmbedding(
+                model_name="sentence-transformers/all-MiniLM-L6-v2",
+                cache_dir=cache_path
+            )
         except Exception as e:
             print("[Embeddings] FastEmbed initialization failed:", e)
 

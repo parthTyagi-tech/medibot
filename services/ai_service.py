@@ -182,7 +182,7 @@ class RobustHybridChatModel(BaseChatModel):
 
         if groq_key:
             try:
-                self.fallback_model = ChatGroq(model="openai/gpt-oss-120b", groq_api_key=groq_key, temperature=0.3)
+                self.fallback_model = ChatGroq(model="groq/compound", groq_api_key=groq_key, temperature=0.3)
             except Exception as e:
                 logger.warning(f"[HybridModel] Fallback Groq initialization warning: {e}")
 
