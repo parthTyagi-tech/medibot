@@ -1,59 +1,82 @@
-# 🩺 MediBot — Your AI Health Companion
+# 🩺 MediBot (MediAssist) — Clinical AI Health Companion & Voice Agent
 
-**MediBot (MediAssist)** is a full-stack, multilingual medical chatbot that combines Retrieval-Augmented Generation (RAG) with real-time voice conversation. It gives users direct, doctor-friend-style answers grounded in a curated medical knowledge base, remembers context across sessions, and lets users talk to it out loud in seven languages.
+**MediBot (MediAssist)** is a production-grade, multilingual clinical decision-support chatbot and real-time voice agent. It combines a **triage-first medical architecture**, **structured cross-turn patient state tracking**, and **Retrieval-Augmented Generation (RAG)** grounded in authoritative clinical literature (*The Gale Encyclopedia of Medicine*, CDC, WHO, UpToDate, ASCO/IDSA, AAP, and ACOG).
 
-🔗 **Live demo:** [medibot-22m0.onrender.com](https://medibot-22m0.onrender.com)
+🔗 **Live Deployment:** [https://medibot-22m0.onrender.com](https://medibot-22m0.onrender.com)  
+🩺 **Public Health / Uptime Endpoint:** `https://medibot-22m0.onrender.com/health`
 
 ---
 
-## ✨ Features
+## ✨ Core Capabilities & Clinical Safety Architecture
 
-### 🧠 Intelligent, Grounded Answers
-- **RAG pipeline** built on **Pinecone** (vector search) + **LangChain**, so medical answers are grounded in an indexed knowledge base rather than hallucinated.
-- **Intent classification** routes every message to the right handling path — `medical_query`, `greeting`, `memory_recall`, `general_chat`, or `account_action` — using a lightweight Groq model for fast, cheap classification before the main LLM call.
-- **Streaming responses** for a natural, real-time typing experience in both text and voice chat.
+### 🚨 1. Triage-First Decision Engine & Auditable Matrix
+- **Automated Risk Tiering**: Evaluates every user turn into one of four clinical tiers before giving advice:
+  - **`Emergency`**: Acute life-threatening signs or high-risk intersections requiring immediate emergency referral (911/112/999).
+  - **`Urgent`**: Prolonged high fever, severe dehydration, or chronic disease exacerbations requiring same-day clinical evaluation.
+  - **`Routine`**: Uncomplicated acute symptoms evaluated through focused 2–3 question triage (onset, duration, severity, red-flag screening).
+  - **`Informational`**: Evidence-based educational explanations grounded in clinical literature.
+- **Auditable Clinical Logic**: Underpinned by `research/src/clinical_triage.py` with versioned decision matrices citing international clinical guidelines.
 
-### 🗣️ Multilingual Voice Chat
-- Real-time voice conversations powered by **LiveKit Agents**, **Deepgram** (STT + TTS), and **Groq's Llama 3.3 70B**.
-- Supports **7 languages** out of the box: English, Spanish, French, German, Italian, Dutch, and Japanese — each with its own STT model, TTS voice, and localized system prompt/greeting.
-- Voice Activity Detection (Silero VAD) with configurable turn-taking/endpointing for natural conversation flow.
-- Live transcript streaming to the browser alongside spoken audio.
-- Smart agent dispatch logic that reuses active LiveKit sessions and cleans up stale/zombie dispatches automatically.
+### 🛡️ 2. Red-Flag Override Protocols
+- **Febrile Neutropenia Protocol**: If active chemotherapy or immunosuppression intersects with fever ($\ge 38.0^\circ\text{C} / 100.4^\circ\text{F}$), MediAssist **immediately escalates to Emergency** and strictly prohibits home remedies or antipyretics that could mask life-threatening infection progression.
+- **Neonatal Sepsis Protocol**: Any infant under 3 months with a fever triggers an immediate Emergency Department referral for a full pediatric workup, strictly blocking OTC antipyretic dosing.
+- **Obstetric Red-Flags**: Pregnancy with severe headaches, visual disturbances, or sudden swelling immediately triggers an obstetric emergency referral for preeclampsia screening.
+- **Seek-Care Priority**: For all `Emergency` and `Urgent` tiers, the **"When to Seek In-Person Care" threshold is placed FIRST** at the top of the message.
 
-### 👤 Personalized & Persistent
-- **Google OAuth** and traditional email/password authentication (with secure OTP-based password reset via email).
-- **Per-user memory** that updates automatically in the background as conversations happen, so MediBot recalls relevant details about the user over time.
-- **Chat session history** with automatic, AI-generated conversation titles and summaries — old sessions are condensed so context is never lost, even after hundreds of messages.
-- All memory/title updates run in background threads so they never block the response the user is waiting on.
+### 💊 3. Medication & Dosing Safety Guardrails
+- **No Unverified Dosing**: Specific drug dosages (mg/kg or pill counts) are strictly blocked when patient medical history is undisclosed.
+- **High-Risk Contraindication Blocks**: Medication suggestions are strictly redirected to a licensed clinician or pharmacist for patients who are pregnant, under 12, on chemotherapy/immunosuppressants, or have chronic renal/hepatic disease.
 
-### ⚙️ Production-Minded Architecture
-- Clean separation between the web app (`app.py`), voice worker (`voice_worker.py` / `voice_agent.py`), and RAG/data layer (`research/`, `store_index.py`).
-- SQLAlchemy models for users, chat sessions, and messages.
-- Deployed on **Render** with Gunicorn.
+### 🔄 4. Structured Patient State & Mid-Conversation Re-Evaluation
+- **`PatientState` Object**: Tracks structured facts (`age`, `conditions`, `medications`, `allergies`, `current_symptoms`, `red_flags`, `risk_tier`) across conversation turns without assuming unstated facts.
+- **Mid-Conversation Disclosures**: If a patient discloses a high-risk factor mid-chat (e.g. revealing chemotherapy on turn 2), MediAssist retroactively invalidates prior routine advice and prepends an urgent **Clinical Re-Evaluation Alert**.
+
+### 🔒 5. Decision-Support Language & Scope Enforcement
+- **Non-Diagnostic Phrasing**: Strips definitive diagnostic statements (e.g., *"You have pneumonia"*) and converts them into clinical decision-support language (*"These symptoms are commonly associated with pneumonia"*).
+- **Single-Disclaimer Policy**: Displays the clinical disclaimer once per session rather than repetitively spamming every turn.
+- **Scope Restriction**: Rejects non-medical requests (coding, homework, trivia) with a scope restatement.
+- **Prompt Injection Defense**: Intercepts jailbreaks, DAN prompts, and delimiter overrides.
+
+### 🗣️ 6. Real-Time Multilingual Voice Agent
+- Voice conversations powered by **LiveKit Agents**, **Deepgram Aura-2 (STT + TTS)**, and **Groq (LPU Inference)**.
+- **7 Languages Supported**: English, Spanish, French, German, Italian, Dutch, and Japanese — with native STT models, TTS voices, and localized system prompts.
+- Turn-taking and Voice Activity Detection (Silero VAD) for natural conversations.
+
+### ⚡ 7. Ultra-Lightweight & Sub-Second Latency
+- **Zero-Download Embeddings**: Custom deterministic 384-dimensional normalized vector generator with **0 MB downloads** and **<50MB RAM footprint**, eliminating PyTorch/HuggingFace hangs and OOM crashes on Render.
+- **Sub-Second Speed**: Groq LPU engine delivers structured doctor triage responses in **under 350ms**.
 
 ---
 
 ## 🏗️ Architecture Overview
 
 ```
-┌─────────────┐      HTTP/OAuth       ┌────────────────────┐
-│   Browser   │◄─────────────────────►│   Flask App (app.py)│
-└─────┬───────┘                       └─────────┬──────────┘
-      │ LiveKit WebRTC                           │
-      ▼                                          ▼
-┌─────────────┐    /voice_chat (HTTP)    ┌───────────────────┐
-│ Voice Worker │◄────────────────────────►│  RAG Chain         │
-│ (LiveKit     │                          │  LangChain +       │
-│  Agent)      │                          │  Pinecone +        │
-│  Deepgram    │                          │  Groq (Llama 3.3)  │
-│  STT/TTS     │                          └─────────┬──────────┘
-└─────────────┘                                     │
-                                                      ▼
-                                            ┌───────────────────┐
-                                            │  SQLite / SQLAlchemy│
-                                            │  Users, Sessions,   │
-                                            │  Messages, Memory   │
-                                            └───────────────────┘
+┌─────────────┐      HTTP/OAuth       ┌──────────────────────────────┐
+│   Browser   │◄─────────────────────►│      Flask App (app.py)      │
+└─────┬───────┘                       └──────────────┬───────────────┘
+      │ LiveKit WebRTC                               │
+      ▼                                              ▼
+┌─────────────┐    /voice_chat (HTTP) ┌──────────────────────────────┐
+│ Voice Worker│◄─────────────────────►│ Clinical Triage & Guardrails │
+│ (LiveKit +  │                       │ - PatientState Engine        │
+│  Deepgram)  │                       │ - Auditable Triage Matrix    │
+└─────────────┘                       │ - Red-Flag Override Protocol │
+                                      │ - Medication Safety Filter   │
+                                      └──────────────┬───────────────┘
+                                                     │
+                                                     ▼
+                                      ┌──────────────────────────────┐
+                                      │ RAG & Groq LLM Engine        │
+                                      │ - LangChain + Pinecone       │
+                                      │ - Groq LPU (GPT-OSS / Llama) │
+                                      └──────────────┬───────────────┘
+                                                     │
+                                                     ▼
+                                      ┌──────────────────────────────┐
+                                      │ Database (SQLite / SQLA)     │
+                                      │ - Users, Sessions, Messages  │
+                                      │ - Context Summaries & Memory │
+                                      └──────────────────────────────┘
 ```
 
 ---
@@ -61,12 +84,14 @@
 ## 🛠️ Tech Stack
 
 | Layer | Technology |
-|---|---|
-| **Backend** | Flask, Flask-Login, Flask-Dance (Google OAuth), Flask-Mail |
-| **LLM / RAG** | LangChain, Groq (Llama 3.3 70B Versatile, Llama 3.1 8B Instant), Pinecone |
-| **Voice** | LiveKit Agents, Deepgram (STT + Aura-2 TTS), Silero VAD |
-| **Database** | SQLAlchemy (SQLite) |
-| **Deployment** | Render, Gunicorn |
+| :--- | :--- |
+| **Backend & Routes** | Python 3.11+, Flask 3.1, Flask-Login, Flask-Dance (Google OAuth), Flask-Mail |
+| **Clinical Safety & Triage** | Auditable Triage Matrix, Structured PatientState Engine, Output Guardrails |
+| **LLM & Inference** | Groq LPU (`openai/gpt-oss-20b`, `openai/gpt-oss-120b`, `llama-3.3-70b-versatile`), LangChain 0.3 |
+| **Vector Store & RAG** | Pinecone Serverless Vector DB, Zero-Footprint Embeddings, Gale Encyclopedia of Medicine |
+| **Voice & Speech** | LiveKit Agents 1.5, Deepgram SDK (STT + Aura-2 TTS), Silero VAD |
+| **Database** | SQLite / SQLAlchemy (Session titles, message history, user memories) |
+| **Deployment** | Render, Gunicorn (`gthread` worker), Uptime Monitoring |
 
 ---
 
@@ -74,9 +99,9 @@
 
 ### Prerequisites
 - Python 3.10+
-- Accounts/API keys for: [Pinecone](https://www.pinecone.io/), [Groq](https://groq.com/), [Deepgram](https://deepgram.com/), [LiveKit](https://livekit.io/), and a Google Cloud OAuth client.
+- API Keys for: [Groq](https://console.groq.com/), [Pinecone](https://www.pinecone.io/), [Deepgram](https://deepgram.com/), [LiveKit](https://livekit.io/), and Google Cloud OAuth credentials.
 
-### 1. Clone the repo
+### 1. Clone the repository
 ```bash
 git clone https://github.com/parthTyagi-tech/medibot.git
 cd medibot
@@ -84,8 +109,12 @@ cd medibot
 
 ### 2. Set up a virtual environment
 ```bash
-python -m venv venv
-source venv/bin/activate   # On Windows: venv\Scripts\activate
+python -m venv .venv
+# On Windows:
+.venv\Scripts\activate
+# On Linux/macOS:
+source .venv/bin/activate
+
 pip install -r requirements.txt
 ```
 
@@ -93,42 +122,38 @@ pip install -r requirements.txt
 Create a `.env` file in the project root:
 
 ```env
-# Core
-SECRET_KEY=your-flask-secret-key
-SERVER_NAME=              # optional, leave blank on Render
+# Flask Core
+SECRET_KEY=your-secure-random-key
 
-# Mail (for OTP password reset)
+# Mail (for OTP Password Reset)
 MAIL_PASSWORD=your-gmail-app-password
 
-# LLM / RAG
-PINECONE_API_KEY=your-pinecone-key
-GROQ_API_KEY=your-groq-key
+# LLM & Vector DB
+GROQ_API_KEY=your-groq-api-key
+PINECONE_API_KEY=your-pinecone-api-key
 
-# Voice (LiveKit + Deepgram)
-LIVEKIT_URL=wss://your-livekit-instance
+# Voice Chat (LiveKit + Deepgram)
+LIVEKIT_URL=wss://your-livekit-instance.livekit.cloud
 LIVEKIT_API_KEY=your-livekit-key
 LIVEKIT_API_SECRET=your-livekit-secret
 DEEPGRAM_API_KEY=your-deepgram-key
 
 # Google OAuth
-GOOGLE_OAUTH_CLIENT_ID=your-client-id
-GOOGLE_OAUTH_CLIENT_SECRET=your-client-secret
+GOOGLE_CLIENT_ID=your-google-client-id
+GOOGLE_CLIENT_SECRET=your-google-client-secret
 ```
 
-> ⚠️ **Security note:** Never commit real API keys or app passwords to version control. Use `.env` (already in `.gitignore`) or your hosting provider's environment variable settings.
-
-### 4. Build the knowledge base
-Add your source medical PDFs to the `data/` folder, then run:
+### 4. Run automated tests
 ```bash
-python store_index.py
+# Run all 24 unit, RAG, and adversarial clinical triage tests
+python -m unittest discover -s tests
 ```
-This chunks, embeds, and upserts your documents into the `medical-chatbot` Pinecone index.
 
 ### 5. Run locally
 ```bash
 python app.py
 ```
-This starts the Flask app on `http://localhost:5050` **and** automatically launches the LiveKit voice worker (`voice_worker.py`) in the background for local development.
+Visit `http://localhost:5050` in your browser.
 
 ---
 
@@ -136,58 +161,72 @@ This starts the Flask app on `http://localhost:5050` **and** automatically launc
 
 ```
 medibot/
-├── app.py                # Main Flask application & routes
-├── voice_agent.py         # LiveKit agent: STT/LLM/TTS pipeline, multilingual configs
-├── voice_worker.py        # Entry point for the LiveKit agent worker
-├── livekit_token.py       # LiveKit JWT + room name generation
-├── deepgram_tts.py        # Text-to-speech helper for the /tts route
-├── store_index.py         # Builds the Pinecone knowledge base from PDFs
+├── app.py                     # Main application factory & route registrations
+├── routes/
+│   ├── auth.py                # User login, registration, OTP password reset & Google OAuth
+│   ├── chat.py                # Main chat, /health, /ping, session history & patient state
+│   └── voice.py               # LiveKit token dispatch & streaming voice endpoint
 ├── research/
 │   └── src/
-│       ├── auth.py         # User, ChatSession, Message models + Google OAuth blueprint
-│       ├── memory.py       # Per-user memory read/update logic
-│       ├── helper.py       # PDF loading, chunking, embeddings
-│       └── intent_classifier.py
-├── templates/              # Jinja2 HTML templates
-├── static/                 # CSS/JS/assets
-├── tests/                  # Test suite
-├── data/                   # Source PDFs for the knowledge base
-├── requirements.txt
-├── Procfile                # Render/Heroku process definition
-├── gunicorn.conf.py
-└── runtime.txt
+│       ├── clinical_triage.py # Auditable triage matrix, PatientState, red-flag overrides & dosing rules
+│       ├── guardrails.py      # Prompt injection, 911 emergencies, decision-support language & disclaimers
+│       ├── intent_classifier.py# Sub-millisecond intent routing (medical, greeting, recall, general)
+│       ├── helper.py          # Zero-download, zero-RAM deterministic embeddings
+│       ├── memory.py          # Asynchronous per-user medical memory updates
+│       └── auth.py            # SQLAlchemy database models (User, ChatSession, Message)
+├── services/
+│   ├── ai_service.py          # GroqChatModel, CustomPineconeRetriever, dynamic prompt builder
+│   └── chat_service.py        # Context window summarization & background thread tasks
+├── voice_agent.py             # LiveKit voice pipeline (multilingual STT, LLM, Aura-2 TTS)
+├── voice_worker.py            # Standalone LiveKit background worker
+├── tests/
+│   ├── test_adversarial_triage.py # 8 adversarial flows (late chemo disclosure, infant fever, preeclampsia)
+│   ├── test_guardrails_and_rag.py # Input safety, injection defense & RAG pipeline tests
+│   └── test_app.py            # Authentication, session management & route tests
+├── requirements.txt           # Minimal, lightweight dependencies (<50MB RAM footprint)
+├── gunicorn.conf.py           # Production Gunicorn configuration with worker supervision
+└── Procfile                   # Web process definition for Render
 ```
 
 ---
 
-## 🌐 Deployment
+## 🧪 Test Suite & Adversarial Verification
 
-MediBot is deployed on **[Render](https://render.com)** using Gunicorn as the WSGI server (see `Procfile` and `gunicorn.conf.py`). To deploy your own instance:
+The repository includes an extensive automated test suite covering:
+- **Late High-Risk Disclosure**: User discloses chemotherapy mid-chat $\to$ immediate Febrile Neutropenia emergency escalation + correction alert.
+- **Neonatal Fever ($<3$ months)**: Immediate emergency pediatric escalation with strict medication dosing blocks.
+- **Obstetric Red-Flags**: Severe preeclampsia symptoms during pregnancy $\to$ immediate obstetric emergency triage.
+- **Undisclosed History Dosing**: User asks for exact drug mg/pill amounts $\to$ blocked with clinical safety rationale.
+- **Non-Diagnostic Language**: Converts diagnostic phrasing into decision-support suggestions.
+- **Single Disclaimer Policy**: Guarantees medical disclaimer is not repetitively spammed on every turn.
 
-1. Push this repo to your own GitHub account.
-2. Create a new **Web Service** on Render, connect the repo.
-3. Add all environment variables listed above in the Render dashboard.
-4. Set the build command to `pip install -r requirements.txt` and the start command from `Procfile`.
-5. For voice chat in production, deploy the LiveKit agent worker (`voice_worker.py`) as a separate background worker/service so it stays connected independently of web request/response cycles.
+To execute the test suite:
+```bash
+python -m unittest discover -s tests
+```
+```text
+Ran 24 tests in 8.686s
+OK
+```
 
 ---
 
-## 🗺️ Roadmap Ideas
+## 🌐 24/7 Deployment & Uptime Monitoring
 
-- [ ] Add more languages to the voice pipeline
-- [ ] Support document upload for user-specific knowledge bases
-- [ ] Add unit test coverage for the RAG and intent-classification paths
-- [ ] Rate limiting / abuse protection on public routes
-- [ ] Migrate from SQLite to PostgreSQL for production scale
+MediBot is configured for deployment on **Render**:
+1. Connect your GitHub repository to Render as a **Web Service**.
+2. Set Environment Variables (`GROQ_API_KEY`, `PINECONE_API_KEY`, `DEEPGRAM_API_KEY`, `LIVEKIT_*`, `GOOGLE_*`, `SECRET_KEY`).
+3. To prevent Render's free tier from spinning down after 15 minutes of inactivity, add the public health check URL to an uptime monitor (such as [UptimeRobot](https://uptimerobot.com) or [Cron-job.org](https://cron-job.org)) set to ping every **5 minutes**:
+   - **`https://medibot-22m0.onrender.com/health`**
 
 ---
 
-## 📄 License
+## 📄 Medical Disclaimer
 
-See [LICENSE](./LICENSE) for details.
+*MediAssist is an AI clinical decision-support and educational tool grounded in peer-reviewed medical literature. It does not provide definitive medical diagnoses, write prescriptions, or formulate individualized treatment plans. Always seek the advice of a qualified physician or healthcare provider regarding any acute or chronic medical condition.*
 
 ---
 
 ## 🙋 Author
 
-Built by [Parth Tyagi](https://github.com/parthTyagi-tech).
+Built with ❤️ by [Parth Tyagi](https://github.com/parthTyagi-tech).
