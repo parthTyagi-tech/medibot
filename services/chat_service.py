@@ -12,7 +12,13 @@ from research.src.memory import get_user_memory, update_user_memory
 logger = logging.getLogger("voice-backend")
 
 
-def get_active_session():
+def get_active_session() -> ChatSession:
+    """
+    Retrieves or creates the active ChatSession for the currently authenticated user.
+    
+    Returns:
+        ChatSession: The active chat session instance.
+    """
     print("ACTIVE SESSION:", session.get("chat_session_id"))
     session_id = session.get("chat_session_id")
 
@@ -31,7 +37,16 @@ def get_active_session():
     return chat_session
 
 
-def build_history_text(chat_session):
+def build_history_text(chat_session: ChatSession) -> str:
+    """
+    Builds a formatted rolling dialogue history string with session summary context.
+    
+    Args:
+        chat_session (ChatSession): The session to extract dialogue history for.
+        
+    Returns:
+        str: Formatted context string containing past summaries and recent dialogue turns.
+    """
     messages = Message.query.filter_by(
         session_id=chat_session.id
     ).order_by(Message.created_at).all()
@@ -55,8 +70,14 @@ def build_history_text(chat_session):
     return "\n".join(history)
 
 
-
-def update_session_title(chat_session, first_message):
+def update_session_title(chat_session: ChatSession, first_message: str) -> None:
+    """
+    Generates a concise 4-6 word title for the chat session based on the initial user query.
+    
+    Args:
+        chat_session (ChatSession): The session whose title is being generated.
+        first_message (str): The initial user query.
+    """
     import app
     if chat_session.title == "New Consultation":
         try:
@@ -71,7 +92,16 @@ def update_session_title(chat_session, first_message):
             chat_session.title = first_message[:50]
 
 
-def update_memory_in_background(app_instance, user_id, latest_message, history_text):
+def update_memory_in_background(app_instance, user_id: int, latest_message: str, history_text: str) -> None:
+    """
+    Background worker function to update user long-term medical memory asynchronously.
+    
+    Args:
+        app_instance: The Flask application object for app_context.
+        user_id (int): ID of the user.
+        latest_message (str): The latest user input string.
+        history_text (str): Recent dialogue history.
+    """
     import app
     with app_instance.app_context():
         try:
@@ -85,7 +115,15 @@ def update_memory_in_background(app_instance, user_id, latest_message, history_t
             print(f"[BG Memory Update] Conflict or error: {e}")
 
 
-def update_title_in_background(app_instance, session_id, first_message):
+def update_title_in_background(app_instance, session_id: int, first_message: str) -> None:
+    """
+    Background worker function to generate and persist a chat session title asynchronously.
+    
+    Args:
+        app_instance: The Flask application object for app_context.
+        session_id (int): ID of the chat session.
+        first_message (str): The initial user message.
+    """
     with app_instance.app_context():
         try:
             chat_session = ChatSession.query.get(session_id)
@@ -98,7 +136,13 @@ def update_title_in_background(app_instance, session_id, first_message):
             print(f"[BG Title Update] Conflict or error: {e}")
 
 
-def summarize_session(chat_session):
+def summarize_session(chat_session: ChatSession) -> None:
+    """
+    Generates a concise bulleted clinical summary of long consultations for context preservation.
+    
+    Args:
+        chat_session (ChatSession): The chat session to summarize.
+    """
     import app
     messages = Message.query.filter_by(
         session_id=chat_session.id
@@ -129,7 +173,14 @@ def summarize_session(chat_session):
         print(f"[Summarize Session] Error: {e}")
 
 
-def summarize_session_in_background(app_instance, session_id):
+def summarize_session_in_background(app_instance, session_id: int) -> None:
+    """
+    Background worker function to summarize long consultations asynchronously.
+    
+    Args:
+        app_instance: The Flask application object for app_context.
+        session_id (int): ID of the session to summarize.
+    """
     with app_instance.app_context():
         try:
             chat_session = ChatSession.query.get(session_id)
@@ -140,8 +191,16 @@ def summarize_session_in_background(app_instance, session_id):
             print(f"[BG Summarize] Error: {e}")
 
 
-
-def get_active_session_for_user(user_id):
+def get_active_session_for_user(user_id: int) -> ChatSession:
+    """
+    Retrieves the most recent ChatSession for a given user ID or initializes a new session.
+    
+    Args:
+        user_id (int): The user ID.
+        
+    Returns:
+        ChatSession: The active or newly created chat session.
+    """
     chat_session = ChatSession.query.filter_by(user_id=user_id).order_by(ChatSession.updated_at.desc()).first()
     if not chat_session:
         chat_session = ChatSession(user_id=user_id)

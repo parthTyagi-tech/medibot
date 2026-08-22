@@ -44,13 +44,26 @@ class LocalEmbeddings:
         return [self.embed_query(t) for t in texts]
 
 
-def download_embeddings():
+def download_embeddings() -> LocalEmbeddings:
+    """
+    Returns an instance of LocalEmbeddings for zero-overhead vector generation.
+    
+    Returns:
+        LocalEmbeddings: Instantiated local embeddings generator.
+    """
     return LocalEmbeddings()
 
 
-
-
-def load_pdf_files(data):
+def load_pdf_files(data: str) -> List[Document]:
+    """
+    Loads all PDF documents from the specified directory path.
+    
+    Args:
+        data (str): Path to directory containing PDF files.
+        
+    Returns:
+        List[Document]: Extracted LangChain Document instances.
+    """
     loader = DirectoryLoader(
         path=data,
         glob="*.pdf",
@@ -59,7 +72,16 @@ def load_pdf_files(data):
     return loader.load()
 
 
-def filter_to_minimal_docs(docs: List[Document]):
+def filter_to_minimal_docs(docs: List[Document]) -> List[Document]:
+    """
+    Strips non-essential metadata from documents to conserve vector storage footprint.
+    
+    Args:
+        docs (List[Document]): Raw loaded documents.
+        
+    Returns:
+        List[Document]: Cleaned documents with minimal source metadata.
+    """
     minimal_docs = []
 
     for doc in docs:
@@ -79,10 +101,21 @@ def filter_to_minimal_docs(docs: List[Document]):
 
 
 def text_split(
-    docs,
-    chunk_size=2500,
-    chunk_overlap=50
-):
+    docs: List[Document],
+    chunk_size: int = 2500,
+    chunk_overlap: int = 50
+) -> List[Document]:
+    """
+    Splits documents into clinical context chunks with overlap.
+    
+    Args:
+        docs (List[Document]): Documents to split.
+        chunk_size (int): Character size of each chunk.
+        chunk_overlap (int): Overlap between adjacent chunks.
+        
+    Returns:
+        List[Document]: Chunked document list.
+    """
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=chunk_size,
         chunk_overlap=chunk_overlap
