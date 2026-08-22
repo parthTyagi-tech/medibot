@@ -30,7 +30,6 @@ from services.ai_service import (
     NON_MEDICAL_REFUSAL,
     build_prompt
 )
-from services.adk_agent import adk_agent
 from routes import register_routes
 
 # ─────────────────────────────────────────────────────────────

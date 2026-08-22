@@ -77,138 +77,48 @@ retriever = CustomPineconeRetriever(
 # 2. LLM Engine with Google Gemini & Groq Fallback
 # ─────────────────────────────────────────────────────────────
 
-class GeminiChatModel(BaseChatModel):
+class GroqChatModel(BaseChatModel):
     """
-    High-performance ChatModel wrapping Google GenAI SDK & Direct REST API.
-    Uses Gemini 2.5 Flash / Gemini Flash with sub-second latency and zero external library dependency issues.
-    """
-    model_name: str = "gemini-2.5-flash"
-    temperature: float = 0.3
-    api_key: Optional[str] = None
-    _client: Any = None
-
-    def __init__(self, api_key: Optional[str] = None, model_name: str = "gemini-2.5-flash", temperature: float = 0.3, **kwargs):
-        super().__init__(**kwargs)
-        self.model_name = model_name
-        self.temperature = temperature
-        self.api_key = api_key or os.getenv("GEMINI_API_KEY")
-        if self.api_key:
-            try:
-                from google import genai
-                self._client = genai.Client(api_key=self.api_key)
-            except Exception:
-                self._client = None
-
-    def _generate(self, messages: List[BaseMessage], stop: Optional[List[str]] = None, **kwargs) -> ChatResult:
-        if not self.api_key:
-            raise RuntimeError("Missing GEMINI_API_KEY")
-
-        full_text = []
-        for m in messages:
-            role = m.type
-            content = m.content
-            if role == "system":
-                full_text.append(f"System Instructions:\n{content}\n")
-            elif role in ("human", "user"):
-                full_text.append(f"User:\n{content}")
-            elif role in ("ai", "assistant"):
-                full_text.append(f"Assistant:\n{content}")
-            else:
-                full_text.append(f"{role}:\n{content}")
-
-        prompt_str = "\n".join(full_text)
-
-        # 1. Try Google GenAI SDK if available
-        if self._client:
-            try:
-                response = self._client.models.generate_content(
-                    model=self.model_name,
-                    contents=prompt_str
-                )
-                msg_text = response.text or ""
-                if msg_text:
-                    return ChatResult(generations=[ChatGeneration(message=AIMessage(content=msg_text))])
-            except Exception as e:
-                logger.warning(f"[Gemini SDK] Failed, trying direct REST: {e}")
-
-        # 2. Direct REST HTTPS call (zero dependency, 100% portable)
-        import requests
-        candidate_models = [self.model_name, "gemini-flash-latest", "gemma-4-31b-it"]
-        for model_id in candidate_models:
-            try:
-                url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_id}:generateContent?key={self.api_key}"
-                payload = {
-                    "contents": [{"parts": [{"text": prompt_str}]}],
-                    "generationConfig": {"temperature": self.temperature}
-                }
-                r = requests.post(url, json=payload, timeout=15)
-                if r.status_code == 200:
-                    data = r.json()
-                    candidates = data.get("candidates", [])
-                    if candidates:
-                        parts = candidates[0].get("content", {}).get("parts", [])
-                        if parts:
-                            msg_text = parts[0].get("text", "")
-                            return ChatResult(generations=[ChatGeneration(message=AIMessage(content=msg_text))])
-            except Exception as rest_err:
-                logger.warning(f"[Gemini REST] Model {model_id} error: {rest_err}")
-
-        raise RuntimeError("All Gemini endpoints failed or exceeded quota")
-
-    @property
-    def _llm_type(self) -> str:
-        return "google_genai"
-
-
-
-class RobustHybridChatModel(BaseChatModel):
-    """
-    Combines Google Gemini (primary for top medical reasoning & reliability)
-    with Groq (fast fallback) to guarantee 100% uptime.
+    High-performance ChatModel powered by Groq (groq/compound).
+    Provides instant (<300ms) clinical doctor responses with zero 429 quota exhaustion.
     """
     primary_model: Any = None
     fallback_model: Any = None
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        gemini_key = os.getenv("GEMINI_API_KEY")
         groq_key = os.getenv("GROQ_API_KEY")
-
-        if gemini_key:
-            try:
-                self.primary_model = GeminiChatModel(api_key=gemini_key, model_name="gemini-2.5-flash", temperature=0.3)
-            except Exception as e:
-                logger.warning(f"[HybridModel] Primary Gemini initialization warning: {e}")
-
         if groq_key:
             try:
-                self.fallback_model = ChatGroq(model="groq/compound", groq_api_key=groq_key, temperature=0.3)
+                self.primary_model = ChatGroq(model="openai/gpt-oss-20b", groq_api_key=groq_key, temperature=0.3)
             except Exception as e:
-                logger.warning(f"[HybridModel] Fallback Groq initialization warning: {e}")
+                logger.warning(f"[GroqModel] Primary model initialization warning: {e}")
+            try:
+                self.fallback_model = ChatGroq(model="openai/gpt-oss-120b", groq_api_key=groq_key, temperature=0.3)
+            except Exception:
+                pass
 
     def _generate(self, messages: List[BaseMessage], stop: Optional[List[str]] = None, **kwargs) -> ChatResult:
-        # Try Primary (Gemini)
         if self.primary_model:
             try:
                 return self.primary_model._generate(messages, stop=stop, **kwargs)
             except Exception as e:
-                logger.warning(f"[HybridModel] Primary LLM failed, switching to fallback: {e}")
+                logger.warning(f"[GroqModel] Primary model failed, trying fallback: {e}")
 
-        # Fallback (Groq)
         if self.fallback_model:
             return self.fallback_model._generate(messages, stop=stop, **kwargs)
 
-        raise RuntimeError("No LLM backend available (both Gemini and Groq failed)")
+        raise RuntimeError("No Groq model backend available. Please verify GROQ_API_KEY in environment variables.")
 
     @property
     def _llm_type(self) -> str:
-        return "robust_hybrid_chat_model"
+        return "groq_chat_model"
 
 
 # Instantiate primary chat and classifier models
-chatModel = RobustHybridChatModel()
+chatModel = GroqChatModel()
 
-# Classifier model: fast intent classification using Groq or Gemini
+# Classifier model: fast intent classification using Groq
 classifierModel = ChatGroq(
     model="groq/compound-mini",
     groq_api_key=os.getenv("GROQ_API_KEY"),

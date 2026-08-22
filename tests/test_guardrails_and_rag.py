@@ -135,11 +135,11 @@ class TestGuardrailsAndRAG(unittest.TestCase):
             "Doctor triage should ask focused clarifying questions"
         )
 
-    def test_google_adk_agent_initialization(self):
-        from services.adk_agent import create_adk_medical_agent, adk_agent
-        self.assertIsNotNone(adk_agent)
-        self.assertEqual(adk_agent.name, "MediAssistClinicalAgent")
-        self.assertEqual(adk_agent.model, "gemini-2.5-flash")
+    def test_groq_chat_model_initialization(self):
+        from services.ai_service import GroqChatModel
+        model = GroqChatModel()
+        self.assertIsNotNone(model)
+        self.assertEqual(model._llm_type, "groq_chat_model")
 
 
 if __name__ == "__main__":
