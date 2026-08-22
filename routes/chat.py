@@ -30,6 +30,16 @@ from services.chat_service import (
 chat_bp = Blueprint("chat", __name__)
 
 
+@chat_bp.route("/health", methods=["GET"])
+@chat_bp.route("/ping", methods=["GET"])
+def health():
+    return jsonify({
+        "status": "healthy",
+        "service": "MediAssist AI",
+        "timestamp": datetime.now(timezone.utc).isoformat()
+    }), 200
+
+
 @chat_bp.route("/", endpoint="index")
 @login_required
 def index():
