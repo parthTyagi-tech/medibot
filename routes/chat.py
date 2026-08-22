@@ -160,10 +160,18 @@ def chat():
         dynamic_prompt = app_module.build_prompt(history_text, user_memory)
 
         if intent == "medical_query":
-            question_answer_chain = create_stuff_documents_chain(app_module.chatModel, dynamic_prompt)
-            rag_chain = create_retrieval_chain(app_module.retriever, question_answer_chain)
-            response  = rag_chain.invoke({"input": msg})
-            raw_answer = response.get("answer", "Sorry, I couldn't generate a response.")
+            try:
+                question_answer_chain = create_stuff_documents_chain(app_module.chatModel, dynamic_prompt)
+                rag_chain = create_retrieval_chain(app_module.retriever, question_answer_chain)
+                response  = rag_chain.invoke({"input": msg})
+                raw_answer = response.get("answer", "")
+                if not raw_answer or not raw_answer.strip():
+                    raise ValueError("Empty retrieval response")
+            except Exception as rag_err:
+                print(f"[RAG] Retrieval fallback to direct clinical consultation: {rag_err}")
+                direct_prompt = dynamic_prompt.format(context="Clinical medicine reference and Gale Encyclopedia principles.", input=msg)
+                raw_resp = app_module.chatModel.invoke(direct_prompt)
+                raw_answer = raw_resp.content if hasattr(raw_resp, "content") else str(raw_resp)
             answer = app_module.apply_output_guardrails(raw_answer, is_medical=True)
 
         elif intent == "greeting":

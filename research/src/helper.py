@@ -17,6 +17,7 @@ class LocalEmbeddings:
     def __init__(self):
         self._fastembed_model = None
         self._cache = {}
+        self._init_failed = False
         self.api_urls = [
             "https://router.huggingface.co/hf-inference/models/sentence-transformers/all-MiniLM-L6-v2",
         ]
@@ -27,7 +28,7 @@ class LocalEmbeddings:
 
     def _get_model(self):
         """Lazy loader: loads model on-demand without blocking server boot."""
-        if self._fastembed_model is None:
+        if self._fastembed_model is None and not self._init_failed:
             try:
                 os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
                 from fastembed import TextEmbedding
@@ -37,7 +38,8 @@ class LocalEmbeddings:
                     cache_dir=cache_path
                 )
             except Exception as e:
-                print("[Embeddings] FastEmbed initialization failed:", e)
+                self._init_failed = True
+                print("[Embeddings] FastEmbed initialization notice:", e)
         return self._fastembed_model
 
     def embed_query(self, text: str) -> List[float]:

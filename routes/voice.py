@@ -132,8 +132,13 @@ def voice_chat():
             full_response = []
             if intent == "medical_query":
                 # Retrieve documents from Pinecone
-                docs = retriever.invoke(msg)
-                context = "\n\n".join([doc.page_content for doc in docs])
+                try:
+                    docs = retriever.invoke(msg)
+                    context = "\n\n".join([doc.page_content for doc in docs])
+                except Exception:
+                    context = "Clinical medical reference and Gale Encyclopedia principles."
+                if not context.strip():
+                    context = "Clinical medical reference and Gale Encyclopedia principles."
                 formatted_prompt = dynamic_prompt.format(context=context, input=msg)
                 
                 for chunk in chatModel.stream(formatted_prompt):
