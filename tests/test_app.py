@@ -88,8 +88,8 @@ class MedicalChatBotTestCase(unittest.TestCase):
         logout_resp = self.client.get('/logout', follow_redirects=True)
         self.assertEqual(logout_resp.status_code, 200)
 
-    @patch('app.mail.send')
-    def test_forgot_password_and_reset_flow(self, mock_mail_send):
+    @patch('routes.auth.send_async_email')
+    def test_forgot_password_and_reset_flow(self, mock_email_send):
         """Test OTP generation, mail sending, verification, and password reset."""
         # 1. Create user
         self.client.post('/signup', data={
@@ -106,7 +106,7 @@ class MedicalChatBotTestCase(unittest.TestCase):
         }, follow_redirects=True)
         
         self.assertEqual(forgot_resp.status_code, 200)
-        mock_mail_send.assert_called_once()
+        mock_email_send.assert_called_once()
         
         # Get generated OTP from database
         user = User.query.filter_by(email='reset@example.com').first()
