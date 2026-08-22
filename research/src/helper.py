@@ -17,19 +17,6 @@ class LocalEmbeddings:
     def __init__(self):
         self._fastembed_model = None
         self._cache = {}
-
-        # 1. Try ultra-lightweight FastEmbed (ONNX Runtime, no torch, ~30MB RAM)
-        try:
-            os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
-            from fastembed import TextEmbedding
-            cache_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), ".fastembed_cache")
-            self._fastembed_model = TextEmbedding(
-                model_name="sentence-transformers/all-MiniLM-L6-v2",
-                cache_dir=cache_path
-            )
-        except Exception as e:
-            print("[Embeddings] FastEmbed initialization failed:", e)
-
         self.api_urls = [
             "https://router.huggingface.co/hf-inference/models/sentence-transformers/all-MiniLM-L6-v2",
         ]
@@ -38,6 +25,21 @@ class LocalEmbeddings:
         if token:
             self.headers["Authorization"] = f"Bearer {token}"
 
+    def _get_model(self):
+        """Lazy loader: loads model on-demand without blocking server boot."""
+        if self._fastembed_model is None:
+            try:
+                os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
+                from fastembed import TextEmbedding
+                cache_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), ".fastembed_cache")
+                self._fastembed_model = TextEmbedding(
+                    model_name="sentence-transformers/all-MiniLM-L6-v2",
+                    cache_dir=cache_path
+                )
+            except Exception as e:
+                print("[Embeddings] FastEmbed initialization failed:", e)
+        return self._fastembed_model
+
     def embed_query(self, text: str) -> List[float]:
         if not text:
             return [0.0] * 384
@@ -45,9 +47,10 @@ class LocalEmbeddings:
         if text in self._cache:
             return self._cache[text]
 
-        if self._fastembed_model:
+        model = self._get_model()
+        if model:
             try:
-                embeddings = list(self._fastembed_model.embed([text]))
+                embeddings = list(model.embed([text]))
                 if embeddings and len(embeddings[0]) == 384:
                     vec = [float(x) for x in embeddings[0]]
                     self._cache[text] = vec
@@ -78,9 +81,10 @@ class LocalEmbeddings:
         if not texts:
             return []
 
-        if self._fastembed_model:
+        model = self._get_model()
+        if model:
             try:
-                embeddings = list(self._fastembed_model.embed(texts))
+                embeddings = list(model.embed(texts))
                 return [[float(x) for x in emb] for emb in embeddings]
             except Exception as e:
                 print("[Embeddings] FastEmbed embed_documents fallback:", e)
