@@ -19,6 +19,7 @@ from livekit.agents import (
     JobContext,
     JobProcess,
     WorkerOptions,
+    JobExecutorType,
     cli,
     get_job_context,
     StopResponse,
@@ -471,11 +472,14 @@ if __name__ == "__main__":
     ):
         sys.argv.append("--no-reload")
 
+    num_idle_proc = int(os.getenv("LIVEKIT_NUM_IDLE_PROCESSES", "0"))
     cli.run_app(
         WorkerOptions(
             entrypoint_fnc=entrypoint,
-            prewarm_fnc=prewarm,
+            prewarm_fnc=prewarm if num_idle_proc > 0 else None,
             agent_name="medical-agent",
             initialize_process_timeout=120.0,
+            num_idle_processes=num_idle_proc,
+            job_executor_type=JobExecutorType.THREAD,
         )
     )

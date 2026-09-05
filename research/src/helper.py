@@ -35,6 +35,8 @@ class LocalEmbeddings:
 
         norm = math.sqrt(sum(x * x for x in vec)) or 1.0
         normalized_vec = [float(x / norm) for x in vec]
+        if len(self._cache) >= 128:
+            self._cache.clear()
         self._cache[text] = normalized_vec
         return normalized_vec
 

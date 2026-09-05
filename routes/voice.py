@@ -192,6 +192,8 @@ def voice_chat():
         except Exception as e:
             current_app.logger.error(f"[voice_chat] Streaming error: {e}", exc_info=True)
             yield "Sorry, something went wrong on my end."
+        finally:
+            db.session.remove()
 
     return Response(stream_with_context(g()), mimetype="text/plain")
 

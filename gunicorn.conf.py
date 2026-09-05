@@ -8,13 +8,13 @@ import threading
 port = os.getenv("PORT", "10000")
 bind = f"0.0.0.0:{port}"
 workers = 1
-threads = 4
+threads = 2
 worker_class = "gthread"
 timeout = 120
 graceful_timeout = 30
 keepalive = 5
-max_requests = 500
-max_requests_jitter = 50
+max_requests = 100
+max_requests_jitter = 25
 
 
 _worker_process = None
@@ -24,17 +24,43 @@ _keep_running = True
 
 def _supervise_worker():
     global _worker_process, _keep_running
+
+    # Check if voice worker is enabled or if credentials are configured
+    enable_voice = os.getenv("ENABLE_VOICE_WORKER", "true").lower() in ("true", "1", "yes")
+    livekit_url = os.getenv("LIVEKIT_URL", "").strip()
+    livekit_key = os.getenv("LIVEKIT_API_KEY", "").strip()
+
+    if not enable_voice or not livekit_url or not livekit_key:
+        print(
+            "[gunicorn.conf.py] Voice worker is disabled (ENABLE_VOICE_WORKER=false or missing LIVEKIT credentials). "
+            "Skipping voice worker subprocess to conserve RAM.",
+            file=sys.stderr,
+        )
+        return
+
     print("[gunicorn.conf.py] Starting LiveKit agent worker supervisor thread...")
+    consecutive_failures = 0
+
     while _keep_running:
         if _worker_process is None or _worker_process.poll() is not None:
             if _worker_process is not None and _worker_process.poll() is not None:
                 exit_code = _worker_process.poll()
+                consecutive_failures += 1
+                if consecutive_failures >= 5:
+                    print(
+                        f"[gunicorn.conf.py] Voice worker crashed 5 consecutive times (last exit {exit_code}). "
+                        "Halting supervisor to prevent container memory exhaustion.",
+                        file=sys.stderr,
+                    )
+                    break
+
+                backoff = min(60, 5 * (2 ** (consecutive_failures - 1)))
                 print(
                     f"[gunicorn.conf.py] Voice worker process (PID {_worker_process.pid}) "
-                    f"exited with code {exit_code}. Restarting in 3 seconds...",
+                    f"exited with code {exit_code}. Retrying in {backoff} seconds...",
                     file=sys.stderr,
                 )
-                time.sleep(3)
+                time.sleep(backoff)
 
             if not _keep_running:
                 break
@@ -54,8 +80,10 @@ def _supervise_worker():
                     f"[gunicorn.conf.py] Failed to launch voice worker: {e}",
                     file=sys.stderr,
                 )
-                time.sleep(5)
-        time.sleep(2)
+                time.sleep(10)
+        else:
+            consecutive_failures = 0
+        time.sleep(3)
 
 
 def on_starting(server):

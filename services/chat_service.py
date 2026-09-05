@@ -113,6 +113,8 @@ def update_memory_in_background(app_instance, user_id: int, latest_message: str,
         except Exception as e:
             db.session.rollback()
             print(f"[BG Memory Update] Conflict or error: {e}")
+        finally:
+            db.session.remove()
 
 
 def update_title_in_background(app_instance, session_id: int, first_message: str) -> None:
@@ -134,6 +136,8 @@ def update_title_in_background(app_instance, session_id: int, first_message: str
         except Exception as e:
             db.session.rollback()
             print(f"[BG Title Update] Conflict or error: {e}")
+        finally:
+            db.session.remove()
 
 
 def summarize_session(chat_session: ChatSession) -> None:
@@ -189,6 +193,8 @@ def summarize_session_in_background(app_instance, session_id: int) -> None:
                 print(f"[BG Summarize] Completed for session {session_id}")
         except Exception as e:
             print(f"[BG Summarize] Error: {e}")
+        finally:
+            db.session.remove()
 
 
 def get_active_session_for_user(user_id: int) -> ChatSession:
