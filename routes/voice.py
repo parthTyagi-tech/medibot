@@ -37,6 +37,10 @@ from services.chat_service import (
     get_active_session_for_user,
     generate_voice_response
 )
+from services.task_dispatcher import (
+    enqueue_memory_update,
+    enqueue_title_update
+)
 
 voice_bp = Blueprint("voice", __name__)
 
@@ -112,20 +116,12 @@ def voice_chat():
                 db.session.add(user_msg)
                 db.session.commit()
 
-                # Trigger background memory update asynchronously
-                threading.Thread(
-                    target=update_memory_in_background,
-                    args=(app_obj, user.id, msg, build_history_text(chat_session)),
-                    daemon=True
-                ).start()
+                # Trigger decoupled background memory update asynchronously (Phase A, B, C)
+                enqueue_memory_update(user.id, msg, build_history_text(chat_session))
 
-                # Trigger background title update asynchronously
+                # Trigger decoupled background title update asynchronously
                 if chat_session.title == "New Consultation":
-                    threading.Thread(
-                        target=update_title_in_background,
-                        args=(app_obj, chat_session.id, msg),
-                        daemon=True
-                    ).start()
+                    enqueue_title_update(chat_session.id, msg)
 
             # 3. Setup patient state & prompt
             history_text = build_history_text(chat_session) if chat_session else ""

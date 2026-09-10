@@ -33,6 +33,11 @@ from services.chat_service import (
     summarize_session,
     summarize_session_in_background
 )
+from services.task_dispatcher import (
+    enqueue_memory_update,
+    enqueue_title_update,
+    enqueue_session_summarize
+)
 
 chat_bp = Blueprint("chat", __name__)
 
@@ -137,31 +142,17 @@ def chat():
         history_text  = build_history_text(chat_session)
         user_memory   = get_user_memory(current_user)
 
-        app_obj = current_app._get_current_object()
+        # Trigger decoupled background memory update asynchronously (Phase A, B, C)
+        enqueue_memory_update(current_user.id, msg, history_text)
 
-        # Trigger background memory update asynchronously (context-aware)
-        threading.Thread(
-            target=update_memory_in_background,
-            args=(app_obj, current_user.id, msg, history_text),
-            daemon=True
-        ).start()
-
-        # Trigger background title update asynchronously
+        # Trigger decoupled background title update asynchronously
         if chat_session.title == "New Consultation":
-            threading.Thread(
-                target=update_title_in_background,
-                args=(app_obj, chat_session.id, msg),
-                daemon=True
-            ).start()
+            enqueue_title_update(chat_session.id, msg)
 
-        # Trigger background context window summarization when history reaches 6+ messages
+        # Trigger decoupled background context window summarization when history reaches 6+ messages
         msg_count = Message.query.filter_by(session_id=chat_session.id).count()
         if msg_count >= 6 and msg_count % 4 == 0:
-            threading.Thread(
-                target=summarize_session_in_background,
-                args=(app_obj, chat_session.id),
-                daemon=True
-            ).start()
+            enqueue_session_summarize(chat_session.id, msg_count)
 
 
         # Load or initialize structured patient state

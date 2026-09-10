@@ -92,24 +92,49 @@ def update_session_title(chat_session: ChatSession, first_message: str) -> None:
             chat_session.title = first_message[:50]
 
 
-def update_memory_in_background(app_instance, user_id: int, latest_message: str, history_text: str) -> None:
+def process_memory_update(user_id: int, latest_message: str, history_text: str) -> None:
     """
-    Background worker function to update user long-term medical memory asynchronously.
-    
-    Args:
-        app_instance: The Flask application object for app_context.
-        user_id (int): ID of the user.
-        latest_message (str): The latest user input string.
-        history_text (str): Recent dialogue history.
+    Executes the memory extraction and updates user's permanent medical profile.
+    Can be called by the decoupled background worker or synchronous fallback.
     """
     import app
+    user = User.query.get(user_id)
+    if user:
+        update_user_memory(user, app.chatModel, latest_message, history_text)
+        db.session.commit()
+        print(f"[BG Memory Update] Completed for user {user_id}")
+
+
+def process_title_update(session_id: int, first_message: str) -> None:
+    """
+    Generates and persists a chat session title.
+    Can be called by the decoupled background worker or synchronous fallback.
+    """
+    chat_session = ChatSession.query.get(session_id)
+    if chat_session and chat_session.title == "New Consultation":
+        update_session_title(chat_session, first_message)
+        db.session.commit()
+        print(f"[BG Title Update] Completed for session {session_id}")
+
+
+def process_session_summarize(session_id: int) -> None:
+    """
+    Summarizes long consultations.
+    Can be called by the decoupled background worker or synchronous fallback.
+    """
+    chat_session = ChatSession.query.get(session_id)
+    if chat_session:
+        summarize_session(chat_session)
+        print(f"[BG Summarize] Completed for session {session_id}")
+
+
+def update_memory_in_background(app_instance, user_id: int, latest_message: str, history_text: str) -> None:
+    """
+    Backwards-compatible wrapper for updating user memory in background.
+    """
     with app_instance.app_context():
         try:
-            user = User.query.get(user_id)
-            if user:
-                update_user_memory(user, app.chatModel, latest_message, history_text)
-                db.session.commit()
-                print(f"[BG Memory Update] Completed for user {user_id}")
+            process_memory_update(user_id, latest_message, history_text)
         except Exception as e:
             db.session.rollback()
             print(f"[BG Memory Update] Conflict or error: {e}")
@@ -119,20 +144,11 @@ def update_memory_in_background(app_instance, user_id: int, latest_message: str,
 
 def update_title_in_background(app_instance, session_id: int, first_message: str) -> None:
     """
-    Background worker function to generate and persist a chat session title asynchronously.
-    
-    Args:
-        app_instance: The Flask application object for app_context.
-        session_id (int): ID of the chat session.
-        first_message (str): The initial user message.
+    Backwards-compatible wrapper for updating session title in background.
     """
     with app_instance.app_context():
         try:
-            chat_session = ChatSession.query.get(session_id)
-            if chat_session and chat_session.title == "New Consultation":
-                update_session_title(chat_session, first_message)
-                db.session.commit()
-                print(f"[BG Title Update] Completed for session {session_id}")
+            process_title_update(session_id, first_message)
         except Exception as e:
             db.session.rollback()
             print(f"[BG Title Update] Conflict or error: {e}")
@@ -179,22 +195,16 @@ def summarize_session(chat_session: ChatSession) -> None:
 
 def summarize_session_in_background(app_instance, session_id: int) -> None:
     """
-    Background worker function to summarize long consultations asynchronously.
-    
-    Args:
-        app_instance: The Flask application object for app_context.
-        session_id (int): ID of the session to summarize.
+    Backwards-compatible wrapper for summarizing session in background.
     """
     with app_instance.app_context():
         try:
-            chat_session = ChatSession.query.get(session_id)
-            if chat_session:
-                summarize_session(chat_session)
-                print(f"[BG Summarize] Completed for session {session_id}")
+            process_session_summarize(session_id)
         except Exception as e:
             print(f"[BG Summarize] Error: {e}")
         finally:
             db.session.remove()
+
 
 
 def get_active_session_for_user(user_id: int) -> ChatSession:
