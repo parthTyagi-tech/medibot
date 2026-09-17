@@ -238,7 +238,10 @@ def chat():
             if correction_alert:
                 raw_answer = f"{correction_alert}\n\n{raw_answer}"
 
-            show_disc = not patient_state.disclaimer_shown
+            # Only show legal disclaimer on the initial medical turn; suppress on follow-up and medication responses
+            is_med_inquiry = any(kw in msg.lower() for kw in ["medication", "medicine", "drug", "pill", "tablet", "dose", "dosing", "syrup"])
+            show_disc = (not patient_state.disclaimer_shown) and not is_med_inquiry
+
             answer = app_module.apply_output_guardrails(
                 raw_answer,
                 is_medical=True,

@@ -334,7 +334,8 @@ def generate_voice_response(msg: str, user=None) -> str:
             raw_answer = response_obj.content if hasattr(response_obj, "content") else str(response_obj)
             if correction_alert:
                 raw_answer = f"{correction_alert}\n\n{raw_answer}"
-            show_disc = not patient_state.disclaimer_shown
+            is_med_inquiry = any(kw in msg.lower() for kw in ["medication", "medicine", "drug", "pill", "tablet", "dose", "dosing", "syrup"])
+            show_disc = (not patient_state.disclaimer_shown) and not is_med_inquiry
             answer = app.apply_output_guardrails(
                 raw_answer,
                 is_medical=True,

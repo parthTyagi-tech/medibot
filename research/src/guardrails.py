@@ -217,7 +217,8 @@ MEDICAL_DISCLAIMER = (
 )
 
 # Common OTC and prescription drug names to suppress for high-risk patients
-HIGH_RISK_PROHIBITED_DRUGS = [
+# Comprehensive list of specific drug names prohibited from being named directly
+UNIVERSALLY_PROHIBITED_DRUGS = [
     r"\bdextromethorphan\b",
     r"\bloperamide\b",
     r"\bacetaminophen\b",
@@ -225,6 +226,7 @@ HIGH_RISK_PROHIBITED_DRUGS = [
     r"\bibuprofen\b",
     r"\badvil\b",
     r"\btylenol\b",
+    r"\bmotrin\b",
     r"\baspirin\b",
     r"\bnaproxen\b",
     r"\baleve\b",
@@ -234,6 +236,7 @@ HIGH_RISK_PROHIBITED_DRUGS = [
     r"\bamoxicillin\b",
     r"\bdolo\b"
 ]
+HIGH_RISK_PROHIBITED_DRUGS = UNIVERSALLY_PROHIBITED_DRUGS
 
 # Decision-support language conversions (replace diagnostic phrases with decision-support phrasing)
 DIAGNOSTIC_LANGUAGE_REPLACEMENTS = [
@@ -274,34 +277,52 @@ def suppress_hallucinated_specialties(text: str, patient_state: Optional[Any] = 
         has_asthma = any("asthma" in c for c in all_conds)
         has_pregnancy = getattr(patient_state, "is_pregnant", False) or any("pregnan" in c for c in all_conds)
 
-    # If cancer NOT disclosed, neutralize oncology hallucination
+    # If cancer NOT disclosed, neutralize oncology/cancer hallucination (including compound phrases)
     if not has_cancer:
-        if re.search(r"\b(your\s+oncologist|your\s+oncology\s+team|your\s+cancer|your\s+chemotherapy|your\s+chemo)\b", cleaned, re.IGNORECASE):
-            hallucinated = True
-            cleaned = re.sub(r"\byour\s+oncologist\b", "a physician", cleaned, flags=re.IGNORECASE)
-            cleaned = re.sub(r"\byour\s+oncology\s+team\b", "a medical professional", cleaned, flags=re.IGNORECASE)
-            cleaned = re.sub(r"\b(because\s+of\s+your\s+cancer(\s+therapies)?|given\s+your\s+cancer)\b.*?[,.]", "", cleaned, flags=re.IGNORECASE)
+        cancer_patterns = [
+            r"\b(?:keep\s+)?your\s+[\w\s]{0,35}?(?:oncolog\w*|cancer|chemo\w*|leukemia|lymphoma)\s+(?:and\s+[\w\s]+\s+)?(?:care\s+providers?|team|doctor|physician|specialist|treatment|therap\w*)[^.\n]*[.?]?",
+            r"\b(your\s+oncologist|your\s+oncology\s+team|your\s+cancer|your\s+chemotherapy|your\s+chemo)\b",
+            r"\b(?:oncology|cancer|chemo)\s+care\s+providers?\b",
+            r"\b(because\s+of\s+your\s+cancer(\s+therapies)?|given\s+your\s+cancer)\b.*?[,.]"
+        ]
+        for pat in cancer_patterns:
+            if re.search(pat, cleaned, re.IGNORECASE):
+                hallucinated = True
+                cleaned = re.sub(pat, " your healthcare provider ", cleaned, flags=re.IGNORECASE)
 
-    # If asthma NOT disclosed, neutralize asthma hallucination
+    # If asthma NOT disclosed, neutralize asthma/pulmonology hallucination
     if not has_asthma:
-        if re.search(r"\b(your\s+asthma|your\s+pulmonologist)\b", cleaned, re.IGNORECASE):
-            hallucinated = True
-            cleaned = re.sub(r"\byour\s+asthma\b", "respiratory symptoms", cleaned, flags=re.IGNORECASE)
-            cleaned = re.sub(r"\byour\s+pulmonologist\b", "a doctor", cleaned, flags=re.IGNORECASE)
+        asthma_patterns = [
+            r"\b(?:keep\s+)?your\s+[\w\s]{0,35}?(?:asthma|pulmonolog\w*)\s+(?:and\s+[\w\s]+\s+)?(?:care\s+providers?|team|doctor|physician|specialist|treatment|inhaler)[^.\n]*[.?]?",
+            r"\b(your\s+asthma|your\s+pulmonologist)\b",
+            r"\basthma\s+care\s+providers?\b"
+        ]
+        for pat in asthma_patterns:
+            if re.search(pat, cleaned, re.IGNORECASE):
+                hallucinated = True
+                cleaned = re.sub(pat, " your healthcare provider ", cleaned, flags=re.IGNORECASE)
 
     # If pregnancy NOT disclosed, neutralize obstetric hallucination
     if not has_pregnancy:
-        if re.search(r"\b(your\s+pregnancy|your\s+obstetrician|your\s+ob[- ]gyn)\b", cleaned, re.IGNORECASE):
-            hallucinated = True
-            cleaned = re.sub(r"\byour\s+pregnancy\b", "your health status", cleaned, flags=re.IGNORECASE)
-            cleaned = re.sub(r"\b(your\s+obstetrician|your\s+ob[- ]gyn)\b", "a healthcare provider", cleaned, flags=re.IGNORECASE)
+        preg_patterns = [
+            r"\b(your\s+pregnancy|your\s+obstetrician|your\s+ob[- ]gyn)\b",
+            r"\bobstetric\s+care\s+providers?\b"
+        ]
+        for pat in preg_patterns:
+            if re.search(pat, cleaned, re.IGNORECASE):
+                hallucinated = True
+                cleaned = re.sub(pat, " your healthcare provider ", cleaned, flags=re.IGNORECASE)
 
+    # Clean up any duplicate spacing created by redactions
+    cleaned = re.sub(r"\s{2,}", " ", cleaned).strip()
     return cleaned, hallucinated
 
 
 def suppress_specific_drug_dosing(text: str, patient_state: Optional[Any] = None) -> Tuple[str, bool]:
     """
-    Suppresses numeric drug dosing and specific drug names in high-risk patients.
+    Suppresses numeric drug dosing and specific drug names across all patient interactions.
+    - High-risk patients: drops the entire recommending sentence and defers to care team.
+    - Routine/Urgent patients: replaces specific drug names with generic symptom categories ("an over-the-counter fever reducer") and defers dosing/choice to pharmacist.
     Returns: (cleaned_text, was_dosing_suppressed)
     """
     cleaned = text
@@ -318,7 +339,7 @@ def suppress_specific_drug_dosing(text: str, patient_state: Optional[Any] = None
             dosing_suppressed = True
             cleaned = re.sub(pattern, "[consult pharmacist or physician for dosage]", cleaned, flags=re.IGNORECASE)
 
-    # 2. For high-risk patients: drop specific drug names and enforce category-level redirect
+    # 2. Check for specific prohibited drug names (UNIVERSAL BAN)
     is_high_risk = False
     if patient_state:
         disclosed = [str(c).lower() for c in getattr(patient_state, "disclosed_conditions", [])]
@@ -333,17 +354,41 @@ def suppress_specific_drug_dosing(text: str, patient_state: Optional[Any] = None
             or getattr(patient_state, "is_infant_under_3mo", False)
         )
 
-    if is_high_risk:
-        for drug_pat in HIGH_RISK_PROHIBITED_DRUGS:
-            if re.search(drug_pat, cleaned, re.IGNORECASE):
-                dosing_suppressed = True
-                cleaned = re.sub(
-                    r"([^.\n]*?" + drug_pat[2:-2] + r"[^.\n]*?\.)",
-                    " Please discuss any medication choices directly with your doctor or pharmacist.",
-                    cleaned,
-                    flags=re.IGNORECASE
-                )
+    # Check if ANY prohibited drug name appears
+    has_prohibited_drug = any(re.search(pat, cleaned, re.IGNORECASE) for pat in UNIVERSALLY_PROHIBITED_DRUGS)
 
+    if has_prohibited_drug:
+        dosing_suppressed = True
+        if is_high_risk:
+            # High-risk: Drop entire sentence recommending the drug
+            for drug_pat in UNIVERSALLY_PROHIBITED_DRUGS:
+                if re.search(drug_pat, cleaned, re.IGNORECASE):
+                    cleaned = re.sub(
+                        r"([^.\n]*?" + drug_pat[2:-2] + r"[^.\n]*?\.)",
+                        " Please discuss any medication choices directly with your doctor or pharmacist.",
+                        cleaned,
+                        flags=re.IGNORECASE
+                    )
+        else:
+            # Routine/general: Replace parentheticals or phrases like "(e.g., acetaminophen or ibuprofen)"
+            cleaned = re.sub(
+                r"\(\s*(?:e\.?g\.?,?\s*)?(?:acetaminophen|paracetamol|ibuprofen|advil|tylenol|motrin|aspirin|dolo|aleve|naproxen)(\s*(?:and|or|\/)\s*(?:acetaminophen|paracetamol|ibuprofen|advil|tylenol|motrin|aspirin|dolo|aleve|naproxen))?\s*\)",
+                "",
+                cleaned,
+                flags=re.IGNORECASE
+            )
+            cleaned = re.sub(
+                r"\b(?:such\s+as|like)\s+(?:acetaminophen|paracetamol|ibuprofen|advil|tylenol|motrin|aspirin|dolo|aleve|naproxen)(\s*(?:and|or|\/)\s*(?:acetaminophen|paracetamol|ibuprofen|advil|tylenol|motrin|aspirin|dolo|aleve|naproxen))?\b",
+                "such as an over-the-counter fever reducer",
+                cleaned,
+                flags=re.IGNORECASE
+            )
+            # Replace any standalone drug names with category reference
+            for drug_pat in UNIVERSALLY_PROHIBITED_DRUGS:
+                cleaned = re.sub(drug_pat, "an over-the-counter fever reducer or pain reliever", cleaned, flags=re.IGNORECASE)
+
+    # Clean up duplicate whitespace
+    cleaned = re.sub(r"\s{2,}", " ", cleaned).strip()
     return cleaned, dosing_suppressed
 
 
@@ -413,10 +458,25 @@ def apply_output_guardrails(
     if circuit_breaker_resp:
         return circuit_breaker_resp
 
-    cleaned = cleaned.strip()
+    # Normalize unicode hyphens, spaces, and quotes to standard characters
+    cleaned = (
+        cleaned.replace("\u2011", "-")
+        .replace("\u2013", "-")
+        .replace("\u2014", "-")
+        .replace("\u2018", "'")
+        .replace("\u2019", "'")
+        .replace("\u201c", '"')
+        .replace("\u201d", '"')
+        .replace("\u202f", " ")
+        .replace("\u00a0", " ")
+    )
 
-    # Append disclaimer once if requested and not already present
-    if is_medical and show_disclaimer and "Disclaimer:" not in cleaned and len(cleaned) > 120:
+    # Append or strip disclaimer
+    if not show_disclaimer:
+        # Strip any redundant disclaimer if generated by LLM or retrieved context
+        cleaned = re.sub(r'(?:\n|\s)*---\s*\*?Disclaimer:.*$', '', cleaned, flags=re.IGNORECASE | re.DOTALL).strip()
+        cleaned = re.sub(r'\*?Disclaimer:\s*MediAssist.*$', '', cleaned, flags=re.IGNORECASE | re.DOTALL).strip()
+    elif is_medical and "Disclaimer:" not in cleaned and len(cleaned) > 40:
         cleaned += MEDICAL_DISCLAIMER
 
     return cleaned

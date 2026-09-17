@@ -562,12 +562,12 @@ def evaluate_triage_tier(state: PatientState, latest_user_msg: str) -> Tuple[str
         return "Urgent", red_flags, "Urgent same-day clinical assessment required for chronic respiratory vulnerability."
 
     if "fever" in state.current_symptoms and (
-        re.search(r"\b(3\s+days|4\s+days|5\s+days|103|104|39\.5|40)\b", text)
-        or (state.duration and any(d in state.duration for d in ["3 day", "4 day", "5 day"]))
-        or (state.temperature and any(t in state.temperature for t in ["103", "104", "105"]))
+        re.search(r"\b(5\s+days|6\s+days|7\s+days|week|weeks|103|104|105|39\.5|40)\b", text)
+        or (state.duration and any(d in state.duration for d in ["5 day", "6 day", "7 day", "week"]))
+        or (state.temperature and any(t in state.temperature for t in ["103", "104", "105", "39.5", "40"]))
     ):
         state.risk_tier = "Urgent"
-        return "Urgent", red_flags, "Urgent primary care / urgent care visit indicated due to fever duration or high elevation."
+        return "Urgent", red_flags, "Urgent primary care / urgent care visit indicated due to high fever elevation or prolonged duration."
 
     # 3. Routine Tier (Standard acute symptoms)
     if state.current_symptoms:
