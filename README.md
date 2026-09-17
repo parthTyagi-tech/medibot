@@ -7,10 +7,11 @@
 [![LiveKit](https://img.shields.io/badge/LiveKit-WebRTC%20Voice%20Agents-000000?style=flat&logo=livekit&logoColor=white)](https://livekit.io/)
 [![Deepgram](https://img.shields.io/badge/Deepgram-Aura--2%20STT%20%2F%20TTS-13EF93?style=flat&logoColor=black)](https://deepgram.com/)
 [![Redis Streams](https://img.shields.io/badge/Redis-Streams%20%26%20DLQ-DC382D?style=flat&logo=redis&logoColor=white)](https://redis.io/)
-[![Tests Passing](https://img.shields.io/badge/Tests-30%2F30%20Passing-brightgreen?style=flat&logo=githubactions&logoColor=white)](tests/)
+[![LangSmith](https://img.shields.io/badge/LangSmith-LLM--as--Judge%20Observability-000000?style=flat&logo=langchain&logoColor=white)](https://smith.langchain.com/)
+[![Tests Passing](https://img.shields.io/badge/Tests-44%2F44%20Passing-brightgreen?style=flat&logo=githubactions&logoColor=white)](tests/)
 [![Render](https://img.shields.io/badge/Render-Live%20Deployment-46E3B7?style=flat&logo=render&logoColor=white)](https://medibot-22m0.onrender.com)
 
-**MediBot (MediAssist)** is an enterprise-grade, multilingual clinical decision-support chatbot and real-time voice agent. It unites a **deterministic triage-first medical architecture**, **structured cross-turn patient state tracking**, and **Retrieval-Augmented Generation (RAG)** grounded in authoritative medical literature (*The Gale Encyclopedia of Medicine*, CDC, WHO, UpToDate, ASCO/IDSA, AAP, and ACOG). 
+**MediBot (MediAssist)** is an enterprise-grade, multilingual clinical decision-support chatbot and real-time voice agent. It unites a **deterministic triage-first medical architecture**, **structured cross-turn patient state tracking**, **Retrieval-Augmented Generation (RAG)** grounded in authoritative medical literature (*The Gale Encyclopedia of Medicine*, CDC, WHO, UpToDate, ASCO/IDSA, AAP, and ACOG), and a **continuous LLM-as-a-judge evaluation layer powered by LangSmith**. 
 
 Engineered for production resilience, it incorporates **decoupled asynchronous reliability via Redis Streams with Dead-Letter Queues (DLQ)**, **idempotency deduplication**, **multi-provider transactional email (Brevo HTTP API + SMTP)**, and a **zero-download deterministic embedding pipeline** running stably within **<50MB RAM**.
 
@@ -69,6 +70,17 @@ Engineered for production resilience, it incorporates **decoupled asynchronous r
 ### ⚡ 9. Ultra-Lightweight & Sub-Second Latency
 - **Zero-Download Embeddings**: Custom deterministic 384-dimensional normalized vector generator with **0 MB downloads** and **<50MB RAM footprint**, eliminating PyTorch/HuggingFace hangs and OOM crashes on Render.
 - **Sub-Second Speed**: Groq LPU engine delivers structured doctor triage responses in **under 350ms** with automatic failover between primary (`openai/gpt-oss-20b`) and secondary (`openai/gpt-oss-120b`) models.
+
+### 📊 10. Continuous RAG Evaluation & LangSmith Observability
+- **11 Clinical Evaluation Metrics**:
+  - *Reference-Based (Offline)*: `context_recall`, `answer_correctness`, `completeness`.
+  - *Reference-Free (Online Shadow & Offline)*: `context_relevance`, `context_rank_correlation` (pure Python Spearman rank correlation), `faithfulness`, `answer_relevance`.
+  - *Clinical Safety & Integrity*: `triage_tier_correctness`, `red_flag_recall`, `non_diagnostic_compliance`, `harmfulness_flag`.
+- **Two-Tier Split Evaluation Architecture**:
+  - **Path A — Offline Gold Benchmark**: Rigorously evaluates RAG pipelines against `data/eval_gold_set.json` (30 curated clinical cases with physician review tracking `reviewed: bool`). Executes batch evaluation via `scripts/run_gold_eval.py` and syncs experiments directly to LangSmith datasets.
+  - **Path B — Online Shadow Evaluation**: Evaluates live user queries asynchronously via Redis streams / ThreadPool with **zero latency impact (<350ms)** on user responses. Sampled at 20% (`EVAL_SAMPLE_RATE=0.2`) to conserve Groq LLM tokens.
+- **Zero-Tolerance Red-Flag Alerts**: Evaluates rule-based safety (`red_flag_preservation`) on **100% of conversation turns**. If an emergency red flag is omitted or harmful advice detected, an immediate high-priority transactional alert email is dispatched to clinicians via Brevo.
+- **Unified Telemetry & Audit Trail**: Every evaluation run logs rich traces and feedback cards to LangSmith project `medibot-eval`, while concurrently persisting audit records with `langsmith_run_id` into the local SQLite `EvalResult` table.
 
 ---
 
@@ -158,9 +170,10 @@ Engineered for production resilience, it incorporates **decoupled asynchronous r
 | **Clinical Safety & Triage** | Custom Clinical Rules Engine, `PatientState` | CDC/WHO/UpToDate auditable triage matrix, pediatric dosing blocks, red-flag overrides |
 | **LLM & Inference** | Groq LPU (`openai/gpt-oss-20b`, `openai/gpt-oss-120b`), LangChain 0.3 | Sub-350ms inference, resilient dual-model failover, dynamic clinical prompt construction |
 | **Vector Database & RAG** | Pinecone 7.3 Serverless, Custom Normalized Embeddings | Grounded in *The Gale Encyclopedia of Medicine*, zero-download 384D deterministic vectors |
+| **LLM-as-Judge & Observability** | LangSmith, Groq (`llama-3.3-70b-versatile`, `gpt-oss-120b`), Custom Eval Engine | Continuous 11-metric evaluation, offline 30-case gold benchmark, online shadow evaluation |
 | **Async Reliability & Queue** | Redis Streams, Consumer Groups, Dead-Letter Queue (DLQ) | Offloaded memory updates, session titling, and summarization with retry backoff & DLQ |
 | **Voice & Speech** | LiveKit Agents 1.5, Deepgram SDK 7.3, Silero VAD | Real-time WebRTC voice pipeline, Deepgram Aura-2 STT/TTS across 7 languages |
-| **Transactional Email** | Brevo (Sendinblue) HTTP API, Resend, Flask-Mail | Multi-provider OTP delivery bypassing cloud SMTP port blocks |
+| **Transactional Email** | Brevo (Sendinblue) HTTP API, Resend, Flask-Mail | Multi-provider OTP delivery and high-priority clinical eval alerts |
 | **Production Server** | Gunicorn (`gthread`), Dual Subprocess Supervisors | Memory-optimized worker configuration supervising Voice and Task worker processes |
 | **Deployment & Uptime** | Render, Uptime Monitoring (`/health`, `/ping`) | Cloud container deployment with persistent health and ping endpoints |
 
@@ -171,8 +184,9 @@ Engineered for production resilience, it incorporates **decoupled asynchronous r
 ### Prerequisites
 - Python 3.10 or higher
 - API Keys for: [Groq](https://console.groq.com/), [Pinecone](https://www.pinecone.io/), [Deepgram](https://deepgram.com/), [LiveKit](https://livekit.io/), and Google Cloud OAuth credentials.
+- *(Optional)* [LangSmith](https://smith.langchain.com/) API Key for real-time RAG evaluation tracing and experiment tracking.
 - *(Optional)* Redis server for Redis Streams background task queue (falls back automatically to in-memory ThreadPool if absent).
-- *(Optional)* Brevo (Sendinblue) API Key for OTP emails over HTTP.
+- *(Optional)* Brevo (Sendinblue) API Key for OTP emails and critical evaluation alerts over HTTP.
 
 ### 1. Clone the repository
 ```bash
@@ -227,6 +241,13 @@ MAIL_USERNAME=your-email@gmail.com
 MAIL_PASSWORD=your-gmail-app-password
 MAIL_DEFAULT_SENDER=your-email@gmail.com
 
+# RAG Evaluation & LangSmith Observability
+EVAL_SAMPLE_RATE=0.2
+EVAL_ALERT_EMAIL=your-email@gmail.com
+LANGCHAIN_TRACING_V2=true
+LANGCHAIN_PROJECT=medibot-eval
+LANGCHAIN_API_KEY=your-langsmith-api-key
+
 # Process Management Flags
 ENABLE_VOICE_WORKER=true
 ENABLE_TASK_WORKER=true
@@ -234,7 +255,7 @@ ENABLE_TASK_WORKER=true
 
 ### 4. Run automated tests
 ```bash
-# Execute all 30 unit, RAG, adversarial clinical triage, and Redis stream tests
+# Execute all 44 unit, RAG, adversarial clinical triage, Redis stream, and evaluation metrics tests
 python -m unittest discover -s tests
 ```
 
@@ -250,6 +271,11 @@ Open `http://localhost:5050` in your browser.
 python task_worker.py
 ```
 
+*(Optional)* Run offline batch evaluation against the 30-case clinical gold benchmark:
+```bash
+python scripts/run_gold_eval.py
+```
+
 ---
 
 ## 📁 Project Structure
@@ -257,6 +283,8 @@ python task_worker.py
 ```
 medibot/
 ├── app.py                     # Application factory, route registration, lifecycle cleanup
+├── data/
+│   └── eval_gold_set.json     # 30-case clinical gold standard evaluation benchmark
 ├── routes/
 │   ├── __init__.py            # Blueprint aggregators
 │   ├── auth.py                # Authentication, OTP password reset, Google OAuth 2.0
@@ -265,20 +293,23 @@ medibot/
 ├── research/
 │   └── src/
 │       ├── clinical_triage.py # Auditable triage matrix, PatientState, red-flag overrides & dosing rules
+│       ├── eval_metrics.py    # 11 clinical & RAG evaluation metrics + Spearman rank correlation
 │       ├── guardrails.py      # Prompt injection tripwires, 911 emergencies, decision-support sanitization
 │       ├── intent_classifier.py# Sub-millisecond two-tier hybrid intent classifier (Regex + Groq)
 │       ├── helper.py          # Zero-download, zero-RAM deterministic 384D normalized vector generator
 │       ├── memory.py          # Asynchronous per-user longitudinal clinical memory extraction
-│       └── auth.py            # SQLAlchemy database models (User, ChatSession, Message)
+│       └── auth.py            # SQLAlchemy database models (User, ChatSession, Message, EvalResult)
 ├── services/
 │   ├── ai_service.py          # Groq dual-model failover, CustomPineconeRetriever, dynamic prompt builder
 │   ├── chat_service.py        # Context window summarization, session titling, background handlers
-│   ├── email_service.py       # Resilient multi-provider email (Brevo HTTP API, Resend, SMTP fallback)
+│   ├── email_service.py       # Resilient multi-provider email (Brevo HTTP API, Resend, eval alerts)
+│   ├── eval_service.py        # Safety & turn eval orchestrator, DB persistence & LangSmith tracing
 │   └── task_dispatcher.py     # Redis Streams publisher, SHA-256 idempotency deduplication, fallback executor
 ├── task_worker.py             # Decoupled Redis Streams background consumer with retries and DLQ
 ├── voice_agent.py             # LiveKit voice pipeline (multilingual STT, LLM, Aura-2 TTS)
 ├── voice_worker.py            # Standalone LiveKit background worker process
 ├── tests/
+│   ├── test_eval_metrics.py       # 14 evaluation metric, gold set schema, and offline runner tests
 │   ├── test_adversarial_triage.py # 8 adversarial flows (late chemo disclosure, infant sepsis, preeclampsia)
 │   ├── test_task_queue.py         # 6 Redis Stream, idempotency, retry backoff, and DLQ tests
 │   ├── test_guardrails_and_rag.py # 10 guardrail tripwires, emergency detection, RAG pipeline tests
@@ -286,6 +317,7 @@ medibot/
 ├── docs/
 │   └── study_notes_and_hld.md # Comprehensive system study notes, HLD architecture & engineering guide
 ├── scripts/
+│   ├── run_gold_eval.py              # Offline batch evaluation runner against gold set (CSV & LangSmith)
 │   ├── generate_study_hld_diagram.py # HLD architecture diagram generator
 │   └── compile_both_documents_pdf.py # Unified documentation compiler
 ├── requirements.txt           # Minimal, lightweight dependencies (<50MB RAM footprint)
@@ -297,9 +329,16 @@ medibot/
 
 ## 🧪 Comprehensive Automated Test Suite
 
-MediBot is verified through an automated test suite containing **30 exhaustive test cases**:
+MediBot is verified through an automated test suite containing **44 exhaustive test cases**:
 
-1. **Adversarial Clinical Triage (`tests/test_adversarial_triage.py`)**:
+1. **LLM-as-Judge RAG Evaluation & Metrics (`tests/test_eval_metrics.py`)**:
+   - **Reference-Free Evaluation**: Tests `faithfulness` against retrieved context, `answer_relevance` to medical inquiries, and `context_relevance`.
+   - **Pure Python Spearman Rank Correlation**: Verifies `context_rank_correlation` calculating rank order without heavyweight Scipy/PyTorch dependencies.
+   - **Reference-Based Evaluation**: Tests `context_recall`, `answer_correctness`, and `completeness` against reference ground truth.
+   - **Clinical Safety Guardrail Tests**: Verifies `red_flag_recall`, non-diagnostic phrasing compliance, and `harmfulness_flag` triggers.
+   - **Benchmark Integrity & Review Flags**: Asserts valid JSON schema across all 30 entries in `eval_gold_set.json` and enforces human review status tracking (`reviewed: bool`).
+
+2. **Adversarial Clinical Triage (`tests/test_adversarial_triage.py`)**:
    - **Late High-Risk Disclosure**: User mentions chemotherapy mid-chat $\to$ immediate Febrile Neutropenia emergency escalation + retroactive correction alert.
    - **Neonatal Fever ($< 3$ months)**: Immediate emergency pediatric escalation with strict OTC medication blocks.
    - **Obstetric Red-Flags**: Severe preeclampsia symptoms during pregnancy $\to$ immediate obstetric emergency triage.
@@ -308,20 +347,20 @@ MediBot is verified through an automated test suite containing **30 exhaustive t
    - **Non-Diagnostic Phrasing**: Diagnostic assertions converted to legally compliant decision-support phrasing.
    - **Single Disclaimer Policy**: Guarantees medical disclaimer is not repetitively spammed across turns.
 
-2. **Decoupled Task Queue & Redis Streams (`tests/test_task_queue.py`)**:
+3. **Decoupled Task Queue & Redis Streams (`tests/test_task_queue.py`)**:
    - **Stream Enqueue**: Verifies durable task publishing to Redis Streams via `XADD`.
    - **Idempotency Deduplication**: Verifies that duplicate tasks (`SET NX`) are dropped before reaching the stream or consuming LLM tokens.
    - **Exponential Backoff**: Verifies that transient failures (e.g., Groq 429 rate limits) trigger exponential backoff retries (up to 3 times).
    - **Dead-Letter Queue (DLQ)**: Verifies unrecoverable tasks are routed to `medical-tasks-dlq`.
    - **Fallback Graceful Execution**: Verifies background tasks execute cleanly when Redis is unreachable.
 
-3. **Guardrails, Emergencies & RAG Pipeline (`tests/test_guardrails_and_rag.py`)**:
+4. **Guardrails, Emergencies & RAG Pipeline (`tests/test_guardrails_and_rag.py`)**:
    - Prompt injection interception (DAN, jailbreaks, delimiter escape).
    - Instant 911 emergency tripwire (chest pain, stroke symptoms).
    - Grounded RAG retrieval from *The Gale Encyclopedia of Medicine*.
    - Dual-model Groq LLM initialization and template escape safety.
 
-4. **Application & Authentication Flows (`tests/test_app.py`)**:
+5. **Application & Authentication Flows (`tests/test_app.py`)**:
    - User signup, password strength validation, session creation, and deletion.
    - OTP generation, Brevo HTTP API dispatch, and password reset verification.
 
@@ -330,7 +369,7 @@ MediBot is verified through an automated test suite containing **30 exhaustive t
 python -m unittest discover -s tests
 ```
 ```text
-Ran 30 tests in 16.170s
+Ran 44 tests in 21.286s
 
 OK
 ```
