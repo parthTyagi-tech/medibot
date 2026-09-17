@@ -63,6 +63,8 @@ signal.signal(signal.SIGTERM, _signal_handler)
 
 
 def get_redis_connection():
+    if not REDIS_URL:
+        return None
     if redis is None:
         logger.error("'redis' python package is not installed. Worker cannot start.")
         sys.exit(1)
@@ -175,16 +177,29 @@ def process_message(client, msg_id: str, data: dict):
 
 def run_worker():
     """Main worker loop consuming from Redis Stream."""
+    if not REDIS_URL:
+        logger.info(
+            "[TaskWorker] REDIS_URL is not set. Standalone fallback is handled in-process "
+            "by ThreadPoolExecutor in TaskDispatcher. Worker exiting cleanly."
+        )
+        return
+
     logger.info(f"Starting worker {CONSUMER_NAME} connecting to {REDIS_URL}...")
     client = get_redis_connection()
 
-    while client is None and _keep_running:
-        logger.warning(f"Waiting for Redis connection at {REDIS_URL}...")
-        time.sleep(5)
+    attempts = 0
+    max_attempts = 3
+    while client is None and _keep_running and attempts < max_attempts:
+        attempts += 1
+        logger.warning(f"Waiting for Redis connection at {REDIS_URL} (attempt {attempts}/{max_attempts})...")
+        time.sleep(3)
         client = get_redis_connection()
 
     if not _keep_running or client is None:
-        logger.info("Worker stopped before startup.")
+        logger.info(
+            f"[TaskWorker] Could not connect to Redis at {REDIS_URL} after {max_attempts} attempts. "
+            "Exiting cleanly; background operations will run via ThreadPoolExecutor."
+        )
         return
 
     init_consumer_group(client)

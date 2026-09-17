@@ -94,11 +94,17 @@ def _supervise_task_worker():
     global _task_worker_process, _keep_running
 
     enable_task_worker = os.getenv("ENABLE_TASK_WORKER", "true").lower() in ("true", "1", "yes")
-    if not enable_task_worker:
-        print("[gunicorn.conf.py] Task worker disabled (ENABLE_TASK_WORKER=false).", file=sys.stderr)
+    redis_url = os.getenv("REDIS_URL", "").strip()
+
+    if not enable_task_worker or not redis_url:
+        print(
+            "[gunicorn.conf.py] Redis task worker disabled (REDIS_URL not configured or ENABLE_TASK_WORKER=false). "
+            "Background tasks will be processed in-process via ThreadPoolExecutor fallback.",
+            file=sys.stderr,
+        )
         return
 
-    print("[gunicorn.conf.py] Starting Redis task worker supervisor thread...")
+    print(f"[gunicorn.conf.py] Starting Redis task worker supervisor thread for {redis_url}...")
     consecutive_failures = 0
 
     while _keep_running:

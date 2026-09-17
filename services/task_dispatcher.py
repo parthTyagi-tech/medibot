@@ -21,7 +21,7 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+REDIS_URL = os.getenv("REDIS_URL", "").strip()
 TASK_STREAM = os.getenv("TASK_STREAM", "medical-background-tasks")
 DLQ_STREAM = os.getenv("DLQ_STREAM", "medical-tasks-dlq")
 CONSUMER_GROUP = os.getenv("TASK_CONSUMER_GROUP", "medical-task-workers")
@@ -32,12 +32,16 @@ _redis_available: Optional[bool] = None
 
 def get_redis_client() -> Optional[Any]:
     """
-    Returns a singleton Redis client instance, or None if Redis is not installed
-    or the server is unreachable.
+    Returns a singleton Redis client instance, or None if Redis is not installed,
+    not configured, or the server is unreachable.
     """
     global _redis_client, _redis_available
     if _redis_client is not None:
         return _redis_client
+
+    if not REDIS_URL:
+        _redis_available = False
+        return None
 
     if redis is None:
         logger.warning("[TaskDispatcher] 'redis' library is not installed.")
