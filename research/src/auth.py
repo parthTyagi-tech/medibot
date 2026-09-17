@@ -64,6 +64,20 @@ class Message(db.Model):
     content = db.Column(db.Text)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
+
+class EvalResult(db.Model):
+    __tablename__ = 'eval_result'
+    id = db.Column(db.Integer, primary_key=True)
+    message_id = db.Column(db.Integer, db.ForeignKey('message.id'), nullable=True)
+    metric_name = db.Column(db.String(64), nullable=False)
+    score = db.Column(db.Float, nullable=True)
+    rationale = db.Column(db.Text, nullable=True)
+    is_rule_based = db.Column(db.Boolean, default=False)
+    langsmith_run_id = db.Column(db.String(128), nullable=True)
+    severity = db.Column(db.String(20), default="normal")  # "normal", "high", "critical"
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+
 @login_manager.user_loader
 def load_user(user_id):
     return User.query.get(int(user_id))

@@ -1,3 +1,5 @@
+import os
+import random
 import threading
 import traceback
 from datetime import datetime, timezone
@@ -36,7 +38,9 @@ from services.chat_service import (
 from services.task_dispatcher import (
     enqueue_memory_update,
     enqueue_title_update,
-    enqueue_session_summarize
+    enqueue_session_summarize,
+    enqueue_eval_safety_check,
+    enqueue_eval_turn
 )
 
 chat_bp = Blueprint("chat", __name__)
@@ -173,6 +177,8 @@ def chat():
         # Save updated patient state
         session[f"patient_state_{chat_session.id}"] = patient_state.to_dict()
 
+        retrieved_chunks = []
+
         # Handle Immediate Red-Flag Overrides (e.g. Febrile Neutropenia / Neonatal Fever / Emergency)
         if override_guidance and risk_tier == "Emergency":
             raw_answer = override_guidance
@@ -193,6 +199,11 @@ def chat():
                 rag_chain = create_retrieval_chain(app_module.retriever, question_answer_chain)
                 response  = rag_chain.invoke({"input": msg})
                 raw_answer = response.get("answer", "")
+                context_docs = response.get("context", [])
+                if isinstance(context_docs, list):
+                    retrieved_chunks = [d.page_content if hasattr(d, "page_content") else str(d) for d in context_docs]
+                elif isinstance(context_docs, str):
+                    retrieved_chunks = [context_docs]
                 if not raw_answer or not raw_answer.strip():
                     raise ValueError("Empty retrieval response")
             except Exception as rag_err:
@@ -243,6 +254,31 @@ def chat():
 
         chat_session.updated_at = datetime.now(timezone.utc)
         db.session.commit()
+
+        # Change 2: Deterministic rule-based safety evaluation on EVERY turn (0 LLM cost)
+        try:
+            enqueue_eval_safety_check(
+                message_id=bot_msg.id,
+                query=msg,
+                response=answer,
+                patient_state=patient_state.to_dict() if patient_state else None
+            )
+        except Exception as eval_err:
+            print(f"[EvalQueue] Failed to enqueue safety check: {eval_err}")
+
+        # Change 1B + Change 3: Sampled online shadow evaluation on medical_query turns
+        try:
+            sample_rate = float(os.getenv("EVAL_SAMPLE_RATE", "0.2"))
+            if intent == "medical_query" and random.random() < sample_rate:
+                enqueue_eval_turn(
+                    message_id=bot_msg.id,
+                    query=msg,
+                    generated_answer=answer,
+                    retrieved_chunks=retrieved_chunks,
+                    patient_state=patient_state.to_dict() if patient_state else None
+                )
+        except Exception as eval_err:
+            print(f"[EvalQueue] Failed to enqueue turn eval: {eval_err}")
 
         return answer
 

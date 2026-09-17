@@ -7,3 +7,5 @@ instance/
 error.log
 static/audio/
 .fastembed_cache/
+.vscode/
+data/*.csv

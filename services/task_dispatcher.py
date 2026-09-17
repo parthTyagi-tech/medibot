@@ -78,6 +78,12 @@ def generate_idempotency_key(task_type: str, **kwargs) -> str:
         session_id = kwargs.get("session_id", "0")
         msg_count = kwargs.get("msg_count", "0")
         return f"idemp:summary:{session_id}:{msg_count}"
+    elif task_type == "EVAL_SAFETY_CHECK":
+        msg_id = kwargs.get("message_id", "0")
+        return f"idemp:eval_safety:{msg_id}"
+    elif task_type == "EVAL_TURN":
+        msg_id = kwargs.get("message_id", "0")
+        return f"idemp:eval:{msg_id}"
     else:
         raw_str = f"{task_type}:{sorted(kwargs.items())}"
         digest = hashlib.sha256(raw_str.encode("utf-8")).hexdigest()[:16]
@@ -167,6 +173,12 @@ def _execute_inline_fallback(task_type: str, payload: Dict[str, Any]) -> bool:
             process_session_summarize(
                 session_id=payload.get("session_id")
             )
+        elif task_type == "EVAL_SAFETY_CHECK":
+            from services.eval_service import run_safety_eval
+            run_safety_eval(payload)
+        elif task_type == "EVAL_TURN":
+            from services.eval_service import run_turn_eval
+            run_turn_eval(payload)
         return True
     except Exception as exc:
         logger.error(f"[TaskDispatcher] Fallback execution failed: {exc}")
@@ -200,3 +212,42 @@ def enqueue_session_summarize(session_id: int, msg_count: int) -> bool:
         "msg_count": msg_count
     }
     return enqueue_task("SESSION_SUMMARIZE", payload, ttl=600)
+
+
+def enqueue_eval_safety_check(
+    message_id: int,
+    query: str,
+    response: str,
+    patient_state: Optional[Dict[str, Any]] = None,
+    red_flag_scenario: Optional[str] = None,
+    expected_tier: Optional[str] = None
+) -> bool:
+    """Convenience helper to enqueue deterministic rule-based safety check on every turn."""
+    payload = {
+        "message_id": message_id,
+        "query": query,
+        "response": response,
+        "patient_state": patient_state,
+        "red_flag_scenario": red_flag_scenario,
+        "expected_tier": expected_tier
+    }
+    return enqueue_task("EVAL_SAFETY_CHECK", payload, ttl=120)
+
+
+def enqueue_eval_turn(
+    message_id: int,
+    query: str,
+    generated_answer: str,
+    retrieved_chunks: list,
+    patient_state: Optional[Dict[str, Any]] = None
+) -> bool:
+    """Convenience helper to enqueue sampled online shadow evaluation."""
+    payload = {
+        "message_id": message_id,
+        "query": query,
+        "generated_answer": generated_answer,
+        "retrieved_chunks": retrieved_chunks,
+        "patient_state": patient_state
+    }
+    return enqueue_task("EVAL_TURN", payload, ttl=120)
+

@@ -13,3 +13,8 @@ Before writing code, stop at the first rung of this ladder that holds:
 
 - The ladder runs *after* you understand the problem, not instead of it. You must read the code the change touches and trace the real flow before picking a rung. Be lazy about the solution, never about reading.
 - Lazy, not negligent: trust-boundary validation, data-loss handling, security, and accessibility are never on the chopping block.
+
+# Plugin Rule
+
+For every task given by the user, you must always check the available plugins (stitch, chrome-devtools-plugin, flutter, google-antigravity-sdk, modern-web-guidance-plugin) and skills (`google_adk`) first to see if any built-in tools or guidelines can solve the task directly or enhance your execution.
+

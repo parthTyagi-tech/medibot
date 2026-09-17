@@ -29,6 +29,10 @@ from services.chat_service import (
     process_title_update,
     process_session_summarize,
 )
+from services.eval_service import (
+    run_safety_eval,
+    run_turn_eval,
+)
 from services.task_dispatcher import (
     REDIS_URL,
     TASK_STREAM,
@@ -102,6 +106,10 @@ def execute_task(task_type: str, payload: dict):
         process_session_summarize(
             session_id=payload.get("session_id")
         )
+    elif task_type == "EVAL_SAFETY_CHECK":
+        run_safety_eval(payload)
+    elif task_type == "EVAL_TURN":
+        run_turn_eval(payload)
     else:
         raise ValueError(f"Unknown task type: {task_type}")
 
@@ -122,6 +130,9 @@ def process_message(client, msg_id: str, data: dict):
 
     logger.info(f"Processing task {task_type} (msg_id: {msg_id}, retry: {retry_count})")
 
+    # Eval tasks have different retry limits (2 for LLM eval, 1 for deterministic safety)
+    effective_max_retries = 2 if task_type == "EVAL_TURN" else (1 if task_type == "EVAL_SAFETY_CHECK" else MAX_RETRIES)
+
     with app.app_context():
         try:
             execute_task(task_type, payload)
@@ -133,9 +144,9 @@ def process_message(client, msg_id: str, data: dict):
         except Exception as exc:
             err_trace = traceback.format_exc()
             retry_count += 1
-            logger.warning(f"Task {task_type} ({msg_id}) failed (attempt {retry_count}/{MAX_RETRIES}): {exc}")
+            logger.warning(f"Task {task_type} ({msg_id}) failed (attempt {retry_count}/{effective_max_retries}): {exc}")
 
-            if retry_count < MAX_RETRIES:
+            if retry_count < effective_max_retries:
                 # Phase B: Exponential backoff re-enqueue
                 backoff_delay = min(60, 2 ** retry_count)
                 time.sleep(backoff_delay)
