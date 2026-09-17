@@ -244,7 +244,7 @@
             document.getElementById("messagesList").innerHTML = "";
 
             data.messages.forEach(m => {
-                const el = createMessageEl(m.content, m.role, m.role === "assistant");
+                const el = createMessageEl(m.content, m.role, m.role === "assistant", false, m.timestamp);
                 document.getElementById("messagesList").appendChild(el);
                 el.classList.add("visible");
             });
@@ -281,7 +281,7 @@
         }
 
         // ── Bubble rendering ────────────────────────────────
-        function createMessageEl(content, role, isHTML = false, isVoice = false) {
+        function createMessageEl(content, role, isHTML = false, isVoice = false, timestamp = null) {
             const wrap = document.createElement("div");
             wrap.className = `message-wrap ${role}`;
 
@@ -309,7 +309,7 @@
 
             const time = document.createElement("div");
             time.className = "msg-time";
-            time.textContent = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+            time.textContent = timestamp || new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
             wrap.appendChild(bubble);
             wrap.appendChild(time);

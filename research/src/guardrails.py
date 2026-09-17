@@ -8,7 +8,7 @@ Includes:
 """
 
 import re
-from typing import Tuple, Optional
+from typing import Tuple, Optional, Any, Dict
 
 # ─────────────────────────────────────────────────────────────
 # 1. Prompt Injection & Jailbreak Defense
@@ -216,6 +216,25 @@ MEDICAL_DISCLAIMER = (
     "or individualized treatment plans and is not a substitute for evaluation by a qualified healthcare professional.*"
 )
 
+# Common OTC and prescription drug names to suppress for high-risk patients
+HIGH_RISK_PROHIBITED_DRUGS = [
+    r"\bdextromethorphan\b",
+    r"\bloperamide\b",
+    r"\bacetaminophen\b",
+    r"\bparacetamol\b",
+    r"\bibuprofen\b",
+    r"\badvil\b",
+    r"\btylenol\b",
+    r"\baspirin\b",
+    r"\bnaproxen\b",
+    r"\baleve\b",
+    r"\bguaifenesin\b",
+    r"\bpseudoephedrine\b",
+    r"\bcodeine\b",
+    r"\bamoxicillin\b",
+    r"\bdolo\b"
+]
+
 # Decision-support language conversions (replace diagnostic phrases with decision-support phrasing)
 DIAGNOSTIC_LANGUAGE_REPLACEMENTS = [
     (r"\byou\s+have\s+(a\s+)?(fever|infection|pneumonia|bronchitis|strep|covid|flu|migraine|asthma)\b", r"these symptoms are commonly associated with \2"),
@@ -234,11 +253,129 @@ def enforce_decision_support_language(text: str) -> str:
     return result
 
 
-def apply_output_guardrails(response_text: str, is_medical: bool = False, show_disclaimer: bool = True) -> str:
+def suppress_hallucinated_specialties(text: str, patient_state: Optional[Any] = None) -> Tuple[str, bool]:
     """
-    Validates and enriches output with clinical safety guardrails.
-    - show_disclaimer: If True and disclaimer is not yet present, appends clinical disclaimer.
-      If False (e.g. disclaimer already shown in session), does not spam repetitive disclaimers.
+    Validates output against patient state disclosures.
+    Detects and neutralizes hallucinated specialist or condition references not disclosed by user.
+    Returns: (cleaned_text, was_hallucinated)
+    """
+    cleaned = text
+    hallucinated = False
+
+    has_cancer = False
+    has_asthma = False
+    has_pregnancy = False
+
+    if patient_state:
+        disclosed = [str(c).lower() for c in getattr(patient_state, "disclosed_conditions", [])]
+        conds = [str(c).lower() for c in getattr(patient_state, "conditions", [])]
+        all_conds = disclosed + conds
+        has_cancer = getattr(patient_state, "is_active_cancer_chemo", False) or any("cancer" in c or "chemo" in c for c in all_conds)
+        has_asthma = any("asthma" in c for c in all_conds)
+        has_pregnancy = getattr(patient_state, "is_pregnant", False) or any("pregnan" in c for c in all_conds)
+
+    # If cancer NOT disclosed, neutralize oncology hallucination
+    if not has_cancer:
+        if re.search(r"\b(your\s+oncologist|your\s+oncology\s+team|your\s+cancer|your\s+chemotherapy|your\s+chemo)\b", cleaned, re.IGNORECASE):
+            hallucinated = True
+            cleaned = re.sub(r"\byour\s+oncologist\b", "a physician", cleaned, flags=re.IGNORECASE)
+            cleaned = re.sub(r"\byour\s+oncology\s+team\b", "a medical professional", cleaned, flags=re.IGNORECASE)
+            cleaned = re.sub(r"\b(because\s+of\s+your\s+cancer(\s+therapies)?|given\s+your\s+cancer)\b.*?[,.]", "", cleaned, flags=re.IGNORECASE)
+
+    # If asthma NOT disclosed, neutralize asthma hallucination
+    if not has_asthma:
+        if re.search(r"\b(your\s+asthma|your\s+pulmonologist)\b", cleaned, re.IGNORECASE):
+            hallucinated = True
+            cleaned = re.sub(r"\byour\s+asthma\b", "respiratory symptoms", cleaned, flags=re.IGNORECASE)
+            cleaned = re.sub(r"\byour\s+pulmonologist\b", "a doctor", cleaned, flags=re.IGNORECASE)
+
+    # If pregnancy NOT disclosed, neutralize obstetric hallucination
+    if not has_pregnancy:
+        if re.search(r"\b(your\s+pregnancy|your\s+obstetrician|your\s+ob[- ]gyn)\b", cleaned, re.IGNORECASE):
+            hallucinated = True
+            cleaned = re.sub(r"\byour\s+pregnancy\b", "your health status", cleaned, flags=re.IGNORECASE)
+            cleaned = re.sub(r"\b(your\s+obstetrician|your\s+ob[- ]gyn)\b", "a healthcare provider", cleaned, flags=re.IGNORECASE)
+
+    return cleaned, hallucinated
+
+
+def suppress_specific_drug_dosing(text: str, patient_state: Optional[Any] = None) -> Tuple[str, bool]:
+    """
+    Suppresses numeric drug dosing and specific drug names in high-risk patients.
+    Returns: (cleaned_text, was_dosing_suppressed)
+    """
+    cleaned = text
+    dosing_suppressed = False
+
+    # 1. Regex scan for numeric dosages (e.g. 10mg, 650mg, 2 tablets, q8h, every 6 hours)
+    dosing_num_patterns = [
+        r"\b\d+(\.\d+)?\s*(mg|milligrams?|mcg|ml|tablets?|pills?|capsules?)\b",
+        r"\bq\d+h\b",
+        r"\bevery\s+\d+\s*(to\s+\d+\s*)?(hours?|hrs?)\b"
+    ]
+    for pattern in dosing_num_patterns:
+        if re.search(pattern, cleaned, re.IGNORECASE):
+            dosing_suppressed = True
+            cleaned = re.sub(pattern, "[consult pharmacist or physician for dosage]", cleaned, flags=re.IGNORECASE)
+
+    # 2. For high-risk patients: drop specific drug names and enforce category-level redirect
+    is_high_risk = False
+    if patient_state:
+        disclosed = [str(c).lower() for c in getattr(patient_state, "disclosed_conditions", [])]
+        conds = [str(c).lower() for c in getattr(patient_state, "conditions", [])]
+        all_conds = disclosed + conds
+        is_high_risk = (
+            getattr(patient_state, "is_active_cancer_chemo", False)
+            or any("cancer" in c or "chemo" in c for c in all_conds)
+            or getattr(patient_state, "is_immunocompromised", False)
+            or getattr(patient_state, "is_pregnant", False)
+            or (getattr(patient_state, "age", None) is not None and getattr(patient_state, "age") < 12)
+            or getattr(patient_state, "is_infant_under_3mo", False)
+        )
+
+    if is_high_risk:
+        for drug_pat in HIGH_RISK_PROHIBITED_DRUGS:
+            if re.search(drug_pat, cleaned, re.IGNORECASE):
+                dosing_suppressed = True
+                cleaned = re.sub(
+                    r"([^.\n]*?" + drug_pat[2:-2] + r"[^.\n]*?\.)",
+                    " Please discuss any medication choices directly with your doctor or pharmacist.",
+                    cleaned,
+                    flags=re.IGNORECASE
+                )
+
+    return cleaned, dosing_suppressed
+
+
+def requires_fixed_emergency_response(patient_state: Optional[Any], triage_tier: str, validator_flags: Dict[str, bool]) -> Optional[str]:
+    """
+    Fail-Closed Circuit Breaker:
+    If triage tier is Emergency and output tripped any suppression validator,
+    discard flawed generation and serve pre-approved clinician-reviewed emergency message.
+    """
+    if triage_tier.upper() == "EMERGENCY" and any(validator_flags.values()):
+        return (
+            "🚨 **CRITICAL MEDICAL EMERGENCY: IMMEDIATE CLINICAL EVALUATION REQUIRED**\n\n"
+            "Based on the combination of symptoms and health factors you have reported, this situation requires "
+            "**immediate in-person medical evaluation** at the nearest Emergency Department or via an emergency oncology/medical hotline.\n\n"
+            "**SAFETY DIRECTIVES:**\n"
+            "1. Please proceed to the nearest Emergency Department immediately. If you have an oncology team or specialist with a 24/7 hotline, contact them now.\n"
+            "2. **Do not self-treat with over-the-counter medications or fever reducers** without specialist authorization, as suppressing symptoms can mask critical infection progression.\n"
+            "3. If experiencing difficulty breathing, chest pain, or confusion, call 911 / 112 / 999 immediately."
+        )
+    return None
+
+
+def apply_output_guardrails(
+    response_text: str,
+    is_medical: bool = False,
+    show_disclaimer: bool = True,
+    patient_state: Optional[Any] = None,
+    triage_tier: str = "Routine"
+) -> str:
+    """
+    Validates and enriches output with clinical safety guardrails, dosing suppression,
+    grounding verification, and fail-closed emergency circuit breakers.
     """
     if not response_text:
         return "I am ready to assist with your medical questions."
@@ -260,6 +397,22 @@ def apply_output_guardrails(response_text: str, is_medical: bool = False, show_d
 
     # Enforce non-diagnostic decision-support wording
     cleaned = enforce_decision_support_language(cleaned)
+
+    # Run Grounding Validation (Neutralize unstated oncology/asthma references)
+    cleaned, flag_hallucinated = suppress_hallucinated_specialties(cleaned, patient_state)
+
+    # Run Dosing & Drug-Identity Suppression
+    cleaned, flag_dosing = suppress_specific_drug_dosing(cleaned, patient_state)
+
+    # Fail-Closed Circuit Breaker on Emergency Tier
+    circuit_breaker_resp = requires_fixed_emergency_response(
+        patient_state,
+        triage_tier,
+        {"hallucinated_specialty": flag_hallucinated, "dosing_detected": flag_dosing}
+    )
+    if circuit_breaker_resp:
+        return circuit_breaker_resp
+
     cleaned = cleaned.strip()
 
     # Append disclaimer once if requested and not already present

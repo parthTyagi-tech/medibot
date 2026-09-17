@@ -56,6 +56,7 @@ RETRY_POLICY = {
     "EVAL_SAFETY_CHECK": {"max_retries": 1, "reason": "Deterministic rule-based, no retry value"},
 }
 DEFAULT_MAX_RETRIES = 3
+MAX_RETRIES = DEFAULT_MAX_RETRIES
 
 CONSUMER_NAME = f"worker-{socket.gethostname()}-{os.getpid()}"
 _keep_running = True

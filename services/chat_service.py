@@ -67,14 +67,14 @@ def build_history_text(chat_session: ChatSession) -> str:
     """
     messages = Message.query.filter_by(
         session_id=chat_session.id
-    ).order_by(Message.created_at).all()
+    ).order_by(Message.created_at.asc(), Message.id.asc()).all()
 
     if not messages:
         return chat_session.summary or ""
 
-    # Rolling window: keep last 6 messages for high-resolution dialogue
+    # Rolling window: keep last 14 messages for high-resolution dialogue context
     history = []
-    for m in messages[-6:]:
+    for m in messages[-14:]:
         role = "Patient" if m.role == "user" else "MediAssist"
         history.append(f"{role}: {m.content}")
 
@@ -304,13 +304,25 @@ def generate_voice_response(msg: str, user=None) -> str:
             raw_answer = override_guidance
             if correction_alert:
                 raw_answer = f"{correction_alert}\n\n{raw_answer}"
-            answer = app.apply_output_guardrails(raw_answer, is_medical=True, show_disclaimer=False)
+            answer = app.apply_output_guardrails(
+                raw_answer,
+                is_medical=True,
+                show_disclaimer=False,
+                patient_state=patient_state,
+                triage_tier=risk_tier
+            )
 
         elif dosing_blocked:
             raw_answer = dosing_refusal
             if correction_alert:
                 raw_answer = f"{correction_alert}\n\n{raw_answer}"
-            answer = app.apply_output_guardrails(raw_answer, is_medical=True, show_disclaimer=False)
+            answer = app.apply_output_guardrails(
+                raw_answer,
+                is_medical=True,
+                show_disclaimer=False,
+                patient_state=patient_state,
+                triage_tier=risk_tier
+            )
 
         elif intent == "medical_query":
             logger.info(f"[generate_voice_response] Step 2: RAG retrieval from Pinecone (The Gale Encyclopedia)...")
@@ -323,7 +335,13 @@ def generate_voice_response(msg: str, user=None) -> str:
             if correction_alert:
                 raw_answer = f"{correction_alert}\n\n{raw_answer}"
             show_disc = not patient_state.disclaimer_shown
-            answer = app.apply_output_guardrails(raw_answer, is_medical=True, show_disclaimer=show_disc)
+            answer = app.apply_output_guardrails(
+                raw_answer,
+                is_medical=True,
+                show_disclaimer=show_disc,
+                patient_state=patient_state,
+                triage_tier=risk_tier
+            )
             patient_state.disclaimer_shown = True
             logger.info(f"[generate_voice_response] Step 2: chatModel returned ({len(answer)} chars)")
         elif intent == "greeting":

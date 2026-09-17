@@ -106,12 +106,19 @@ def load_session(session_id):
 
     messages = Message.query.filter_by(
         session_id=session_id
-    ).order_by(Message.created_at).all()
+    ).order_by(Message.created_at.asc(), Message.id.asc()).all()
 
     return jsonify({
         "session_id": session_id,
         "title":      chat_session.title,
-        "messages":   [{"role": m.role, "content": m.content} for m in messages]
+        "messages":   [
+            {
+                "role": m.role,
+                "content": m.content,
+                "timestamp": m.created_at.strftime("%I:%M %p") if m.created_at else ""
+            }
+            for m in messages
+        ]
     })
 
 
@@ -168,7 +175,7 @@ def chat():
 
         # Load or initialize structured patient state (DB-backed)
         patient_state = load_patient_state(chat_session)
-        patient_state = extract_patient_state(msg, patient_state)
+        patient_state = extract_patient_state(msg, patient_state, llm=app_module.classifierModel)
 
         # Check for mid-conversation high-risk disclosure correction
         correction_alert = check_mid_conversation_correction(patient_state, history_text)
@@ -188,13 +195,25 @@ def chat():
             raw_answer = override_guidance
             if correction_alert:
                 raw_answer = f"{correction_alert}\n\n{raw_answer}"
-            answer = app_module.apply_output_guardrails(raw_answer, is_medical=True, show_disclaimer=False)
+            answer = app_module.apply_output_guardrails(
+                raw_answer,
+                is_medical=True,
+                show_disclaimer=False,
+                patient_state=patient_state,
+                triage_tier=risk_tier
+            )
 
         elif dosing_blocked:
             raw_answer = dosing_refusal
             if correction_alert:
                 raw_answer = f"{correction_alert}\n\n{raw_answer}"
-            answer = app_module.apply_output_guardrails(raw_answer, is_medical=True, show_disclaimer=False)
+            answer = app_module.apply_output_guardrails(
+                raw_answer,
+                is_medical=True,
+                show_disclaimer=False,
+                patient_state=patient_state,
+                triage_tier=risk_tier
+            )
 
         elif intent == "medical_query":
             dynamic_prompt = app_module.build_prompt(history_text, user_memory, patient_state=patient_state)
@@ -220,7 +239,13 @@ def chat():
                 raw_answer = f"{correction_alert}\n\n{raw_answer}"
 
             show_disc = not patient_state.disclaimer_shown
-            answer = app_module.apply_output_guardrails(raw_answer, is_medical=True, show_disclaimer=show_disc)
+            answer = app_module.apply_output_guardrails(
+                raw_answer,
+                is_medical=True,
+                show_disclaimer=show_disc,
+                patient_state=patient_state,
+                triage_tier=risk_tier
+            )
             patient_state.disclaimer_shown = True
 
         elif intent == "greeting":
