@@ -69,6 +69,11 @@ login_manager.login_view = "login"
 
 with app.app_context():
     db.create_all()
+    try:
+        from scripts.migrate_db import run_migrations
+        run_migrations()
+    except Exception as e:
+        app.logger.warning(f"Database schema auto-migration notice: {e}")
 
 # Register Blueprints
 google_bp = create_google_blueprint()

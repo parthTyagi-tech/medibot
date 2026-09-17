@@ -61,9 +61,14 @@ def health():
 @chat_bp.route("/", endpoint="index")
 @login_required
 def index():
-    past_sessions = ChatSession.query.filter_by(
-        user_id=current_user.id
-    ).order_by(ChatSession.updated_at.desc()).limit(10).all()
+    try:
+        past_sessions = ChatSession.query.filter_by(
+            user_id=current_user.id
+        ).order_by(ChatSession.updated_at.desc()).limit(10).all()
+    except Exception as e:
+        logger.error(f"Error fetching past_sessions on index route: {e}")
+        db.session.rollback()
+        past_sessions = []
 
     return render_template(
         "chat.html",
