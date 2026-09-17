@@ -1,3 +1,4 @@
+import json
 import logging
 import traceback
 from datetime import datetime, timezone
@@ -8,8 +9,25 @@ from langchain.chains.combine_documents import create_stuff_documents_chain
 
 from research.src.auth import db, User, ChatSession, Message
 from research.src.memory import get_user_memory, update_user_memory
+from research.src.clinical_triage import PatientState
 
 logger = logging.getLogger("voice-backend")
+
+
+def load_patient_state(chat_session: ChatSession) -> PatientState:
+    """Load patient state from DB column, falling back to empty state."""
+    if chat_session and chat_session.patient_state_json:
+        try:
+            return PatientState.from_dict(json.loads(chat_session.patient_state_json))
+        except Exception:
+            pass
+    return PatientState()
+
+
+def save_patient_state(chat_session: ChatSession, patient_state: PatientState) -> None:
+    """Persist patient state to DB column."""
+    if chat_session:
+        chat_session.patient_state_json = json.dumps(patient_state.to_dict())
 
 
 def get_active_session() -> ChatSession:
@@ -226,8 +244,14 @@ def get_active_session_for_user(user_id: int) -> ChatSession:
 
 
 def generate_voice_response(msg: str, user=None) -> str:
-    """Generates a non-streaming voice response for voice_worker.py."""
+    """Generates a non-streaming voice response with full clinical triage parity."""
     import app
+    from research.src.clinical_triage import (
+        extract_patient_state,
+        evaluate_triage_tier,
+        check_medication_contraindications,
+        check_mid_conversation_correction,
+    )
     try:
         logger.info(f"[generate_voice_response] START — msg='{msg[:60]}', user_id={getattr(user, 'id', None)}")
 
@@ -259,10 +283,36 @@ def generate_voice_response(msg: str, user=None) -> str:
 
         history_text = build_history_text(chat_session) if chat_session else ""
         user_memory = get_user_memory(user) if user else "Voice Session"
-        dynamic_prompt = app.build_prompt(history_text, user_memory, user=user)
+
+        # Load persisted patient state from DB (parity with text path)
+        patient_state = load_patient_state(chat_session)
+        patient_state = extract_patient_state(msg, patient_state)
+
+        # Clinical triage: red-flag overrides & risk tier
+        correction_alert = check_mid_conversation_correction(patient_state, history_text)
+        dosing_blocked, dosing_refusal = check_medication_contraindications(patient_state, msg)
+        risk_tier, red_flags, override_guidance = evaluate_triage_tier(patient_state, msg)
+        patient_state.risk_tier = risk_tier
+        patient_state.red_flags = red_flags
+
+        dynamic_prompt = app.build_prompt(history_text, user_memory, user=user, patient_state=patient_state)
 
         answer = ""
-        if intent == "medical_query":
+
+        # Handle Immediate Red-Flag Overrides (Emergency triage)
+        if override_guidance and risk_tier == "Emergency":
+            raw_answer = override_guidance
+            if correction_alert:
+                raw_answer = f"{correction_alert}\n\n{raw_answer}"
+            answer = app.apply_output_guardrails(raw_answer, is_medical=True, show_disclaimer=False)
+
+        elif dosing_blocked:
+            raw_answer = dosing_refusal
+            if correction_alert:
+                raw_answer = f"{correction_alert}\n\n{raw_answer}"
+            answer = app.apply_output_guardrails(raw_answer, is_medical=True, show_disclaimer=False)
+
+        elif intent == "medical_query":
             logger.info(f"[generate_voice_response] Step 2: RAG retrieval from Pinecone (The Gale Encyclopedia)...")
             docs = app.retriever.invoke(msg)
             context = "\n\n".join([doc.page_content for doc in docs])
@@ -270,7 +320,11 @@ def generate_voice_response(msg: str, user=None) -> str:
             formatted_prompt = dynamic_prompt.format(context=context, input=msg)
             response_obj = app.chatModel.invoke(formatted_prompt)
             raw_answer = response_obj.content if hasattr(response_obj, "content") else str(response_obj)
-            answer = app.apply_output_guardrails(raw_answer, is_medical=True)
+            if correction_alert:
+                raw_answer = f"{correction_alert}\n\n{raw_answer}"
+            show_disc = not patient_state.disclaimer_shown
+            answer = app.apply_output_guardrails(raw_answer, is_medical=True, show_disclaimer=show_disc)
+            patient_state.disclaimer_shown = True
             logger.info(f"[generate_voice_response] Step 2: chatModel returned ({len(answer)} chars)")
         elif intent == "greeting":
             first_name = user.name.split()[0] if user and user.name else "there"
@@ -297,6 +351,9 @@ def generate_voice_response(msg: str, user=None) -> str:
         else:
             # Non-medical queries: decline politely
             answer = app.NON_MEDICAL_REFUSAL
+
+        # Save patient state to DB
+        save_patient_state(chat_session, patient_state)
 
         if chat_session and answer:
             bot_msg = Message(session_id=chat_session.id, role="assistant", content=answer)

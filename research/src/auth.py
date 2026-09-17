@@ -53,6 +53,7 @@ class ChatSession(db.Model):
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
     title = db.Column(db.String(200), default="New Consultation")
     summary = db.Column(db.Text, default="")
+    patient_state_json = db.Column(db.Text, default="")  # Persisted clinical triage state (JSON)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     messages = db.relationship('Message', backref='session', lazy=True, cascade="all, delete-orphan")

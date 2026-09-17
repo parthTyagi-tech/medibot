@@ -46,7 +46,17 @@ logging.basicConfig(
 )
 logger = logging.getLogger("TaskWorker")
 
-MAX_RETRIES = 3
+# Named retry policy — max_retries per task type.
+# Tune here, not in process_message control flow.
+RETRY_POLICY = {
+    "UPDATE_MEMORY":     {"max_retries": 3, "reason": "DB write, transient failure likely"},
+    "UPDATE_TITLE":      {"max_retries": 3, "reason": "LLM call, transient failure likely"},
+    "SESSION_SUMMARIZE": {"max_retries": 3, "reason": "LLM call, transient failure likely"},
+    "EVAL_TURN":         {"max_retries": 2, "reason": "LLM eval, moderate cost"},
+    "EVAL_SAFETY_CHECK": {"max_retries": 1, "reason": "Deterministic rule-based, no retry value"},
+}
+DEFAULT_MAX_RETRIES = 3
+
 CONSUMER_NAME = f"worker-{socket.gethostname()}-{os.getpid()}"
 _keep_running = True
 
@@ -132,8 +142,8 @@ def process_message(client, msg_id: str, data: dict):
 
     logger.info(f"Processing task {task_type} (msg_id: {msg_id}, retry: {retry_count})")
 
-    # Eval tasks have different retry limits (2 for LLM eval, 1 for deterministic safety)
-    effective_max_retries = 2 if task_type == "EVAL_TURN" else (1 if task_type == "EVAL_SAFETY_CHECK" else MAX_RETRIES)
+    # Look up retry limit from named policy
+    effective_max_retries = RETRY_POLICY.get(task_type, {}).get("max_retries", DEFAULT_MAX_RETRIES)
 
     with app.app_context():
         try:
@@ -172,7 +182,7 @@ def process_message(client, msg_id: str, data: dict):
                 dlq_id = client.xadd(DLQ_STREAM, dlq_entry)
                 if idempotency_key:
                     client.set(idempotency_key, "FAILED_DLQ", ex=300)
-                logger.error(f"[DLQ_ROUTED] Task {task_type} failed {MAX_RETRIES} times. Routed to DLQ ({dlq_id}).")
+                logger.error(f"[DLQ_ROUTED] Task {task_type} failed {effective_max_retries} times. Routed to DLQ ({dlq_id}).")
 
 
 def run_worker():

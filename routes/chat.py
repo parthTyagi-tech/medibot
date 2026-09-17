@@ -33,7 +33,9 @@ from services.chat_service import (
     update_memory_in_background,
     update_title_in_background,
     summarize_session,
-    summarize_session_in_background
+    summarize_session_in_background,
+    load_patient_state,
+    save_patient_state,
 )
 from services.task_dispatcher import (
     enqueue_memory_update,
@@ -159,9 +161,9 @@ def chat():
             enqueue_session_summarize(chat_session.id, msg_count)
 
 
-        # Load or initialize structured patient state
-        state_dict = session.get(f"patient_state_{chat_session.id}", {})
-        patient_state = extract_patient_state(msg, PatientState.from_dict(state_dict))
+        # Load or initialize structured patient state (DB-backed)
+        patient_state = load_patient_state(chat_session)
+        patient_state = extract_patient_state(msg, patient_state)
 
         # Check for mid-conversation high-risk disclosure correction
         correction_alert = check_mid_conversation_correction(patient_state, history_text)
@@ -173,9 +175,6 @@ def chat():
         risk_tier, red_flags, override_guidance = evaluate_triage_tier(patient_state, msg)
         patient_state.risk_tier = risk_tier
         patient_state.red_flags = red_flags
-
-        # Save updated patient state
-        session[f"patient_state_{chat_session.id}"] = patient_state.to_dict()
 
         retrieved_chunks = []
 
@@ -218,7 +217,6 @@ def chat():
             show_disc = not patient_state.disclaimer_shown
             answer = app_module.apply_output_guardrails(raw_answer, is_medical=True, show_disclaimer=show_disc)
             patient_state.disclaimer_shown = True
-            session[f"patient_state_{chat_session.id}"] = patient_state.to_dict()
 
         elif intent == "greeting":
             first_name = current_user.name.split()[0] if current_user and current_user.name else "there"
@@ -252,6 +250,8 @@ def chat():
         bot_msg = Message(session_id=chat_session.id, role="assistant", content=answer)
         db.session.add(bot_msg)
 
+        # Persist patient state to DB (shared between text & voice paths)
+        save_patient_state(chat_session, patient_state)
         chat_session.updated_at = datetime.now(timezone.utc)
         db.session.commit()
 

@@ -43,7 +43,7 @@ app.config["MAIL_PORT"]          = 587
 app.config["MAIL_USE_TLS"]       = True
 app.config["MAIL_USE_SSL"]       = False
 app.config["MAIL_USERNAME"]      = "parthtyagi3389@gmail.com"
-app.config["MAIL_PASSWORD"]      = os.getenv("MAIL_PASSWORD", "ajbb ekwo anvz kdwg")
+app.config["MAIL_PASSWORD"]      = os.getenv("MAIL_PASSWORD", "")
 app.config["MAIL_DEFAULT_SENDER"] = "parthtyagi3389@gmail.com"
 
 mail = Mail(app)

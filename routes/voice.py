@@ -30,12 +30,15 @@ from services.ai_service import (
     evaluate_triage_tier,
     check_medication_contraindications
 )
+from research.src.clinical_triage import check_mid_conversation_correction
 from services.chat_service import (
     build_history_text,
     update_memory_in_background,
     update_title_in_background,
     get_active_session_for_user,
-    generate_voice_response
+    generate_voice_response,
+    load_patient_state,
+    save_patient_state,
 )
 from services.task_dispatcher import (
     enqueue_memory_update,
@@ -123,22 +126,32 @@ def voice_chat():
                 if chat_session.title == "New Consultation":
                     enqueue_title_update(chat_session.id, msg)
 
-            # 3. Setup patient state & prompt
+            # 3. Setup patient state & prompt (DB-backed, parity with text path)
             history_text = build_history_text(chat_session) if chat_session else ""
             user_memory = get_user_memory(user) if user else "Voice Session"
-            patient_state = extract_patient_state(msg, PatientState())
+            patient_state = load_patient_state(chat_session)
+            patient_state = extract_patient_state(msg, patient_state)
+            correction_alert = check_mid_conversation_correction(patient_state, history_text)
             risk_tier, red_flags, override_guidance = evaluate_triage_tier(patient_state, msg)
             dosing_blocked, dosing_refusal = check_medication_contraindications(patient_state, msg)
+            patient_state.risk_tier = risk_tier
+            patient_state.red_flags = red_flags
             dynamic_prompt = build_prompt(history_text, user_memory, user=user, patient_state=patient_state)
 
             # 4. Stream response from LLM
             full_response = []
             if override_guidance and risk_tier == "Emergency":
-                yield override_guidance
-                full_response.append(override_guidance)
+                text = override_guidance
+                if correction_alert:
+                    text = f"{correction_alert}\n\n{text}"
+                yield text
+                full_response.append(text)
             elif dosing_blocked:
-                yield dosing_refusal
-                full_response.append(dosing_refusal)
+                text = dosing_refusal
+                if correction_alert:
+                    text = f"{correction_alert}\n\n{text}"
+                yield text
+                full_response.append(text)
             elif intent == "medical_query":
                 # Retrieve documents from Pinecone
                 try:
@@ -150,11 +163,16 @@ def voice_chat():
                     context = "Clinical medical reference and Gale Encyclopedia principles."
                 formatted_prompt = dynamic_prompt.format(context=context, input=msg)
                 
+                if correction_alert:
+                    yield correction_alert + "\n\n"
+                    full_response.append(correction_alert + "\n\n")
+
                 for chunk in chatModel.stream(formatted_prompt):
                     text = chunk.content
                     if text:
                         yield text
                         full_response.append(text)
+                patient_state.disclaimer_shown = True
             else:
                 if intent == "memory_recall":
                     prompt_val = f"User Memory:\n{user_memory}\n\nConversation History:\n{history_text}\n\nUser:\n{msg}"
@@ -177,7 +195,8 @@ def voice_chat():
                             yield text
                             full_response.append(text)
 
-            # 5. Save assistant response to DB
+            # 5. Save patient state + assistant response to DB
+            save_patient_state(chat_session, patient_state)
             if chat_session and full_response:
                 bot_answer = "".join(full_response)
                 bot_msg = Message(session_id=chat_session.id, role="assistant", content=bot_answer)
