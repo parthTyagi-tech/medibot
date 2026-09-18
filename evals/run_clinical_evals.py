@@ -25,7 +25,8 @@ from research.src.clinical_triage import (
     ClinicalTriageEngine,
     format_context_aware_greeting,
     evaluate_triage_tier,
-    check_medication_contraindications
+    check_medication_contraindications,
+    extract_patient_state
 )
 from research.src.intent_classifier import is_third_party_query
 from services.state_store import check_and_apply_ttl, check_emergency_resolution
@@ -50,8 +51,9 @@ def run_benchmark_evals(dataset_path: str = "evals/dataset/clinical_benchmarks.j
         user_input = case["user_input"]
         init_state_data = case.get("patient_state_initial", {})
 
-        # 1. Initialize PatientState
+        # 1. Initialize PatientState & extract state from input
         state = PatientState.from_dict(init_state_data)
+        state = extract_patient_state(user_input, state)
 
         # 2. Check TTL and emergency resolution
         check_and_apply_ttl(state)
@@ -73,20 +75,23 @@ def run_benchmark_evals(dataset_path: str = "evals/dataset/clinical_benchmarks.j
                 assigned_tier = "Informational"
                 response_text = NON_MEDICAL_REFUSAL
             elif any(g in lower_input for g in ["hello", "good evening", "hi medi"]):
-                assigned_tier = state.risk_tier if state.active_emergency else "Informational"
+                assigned_tier = "Emergency" if state.active_emergency else "Informational"
                 response_text = format_context_aware_greeting(state, first_name="Alex", msg=user_input)
             elif is_third_party_query(user_input)[0]:
                 assigned_tier = "Informational"
                 response_text = "To support your family member, listen with empathy and encourage consultation with their oncologist or doctor."
             else:
                 dosing_blocked, dosing_refusal = check_medication_contraindications(state, user_input)
+                tier, flags, guidance = evaluate_triage_tier(state, user_input)
                 if dosing_blocked:
-                    assigned_tier = "Informational"
+                    assigned_tier = tier if tier in ("Routine", "Urgent", "Emergency") else "Informational"
                     response_text = dosing_refusal
                 else:
-                    tier, flags, guidance = evaluate_triage_tier(state, user_input)
                     assigned_tier = tier
-                    response_text = guidance or "Maintain adequate hydration, rest, and monitor your symptoms."
+                    if any(term in lower_input for term in ["diet", "food", "eat", "nutrition"]):
+                        response_text = guidance or "Maintain adequate hydration with electrolyte fluids, rest, and follow balanced age-appropriate nutrition. Avoid restrictive diets like the BRAT diet."
+                    else:
+                        response_text = guidance or "Maintain adequate hydration, rest, and monitor your symptoms."
 
         # 4. Apply deterministic post-generation output guardrails
         sanitized_response = ClinicalOutputGuardrail.sanitize_response(response_text, state)

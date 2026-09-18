@@ -24,8 +24,9 @@ DEFAULT_EMERGENCY_TTL_SECONDS = 12 * 3600  # 12 hours
 
 RESOLVE_PATTERNS = [
     r"back from (the )?(hospital|er|emergency room|clinic|doctor)",
-    r"doctor (cleared|checked|saw|discharged|treated) me",
-    r"oncologist (cleared|treated|saw|discharged) me",
+    r"\b(doctor|oncologist)\s+(has\s+)?(cleared|checked|saw|discharged|treated)\s+me\b",
+    r"\b(doctor|oncologist)\s+cleared\b",
+    r"\b(saw|seen)\s+(the\s+|my\s+)?(doctor|oncologist)\b",
     r"received (iv )?antibiotics",
     r"fever is (gone|resolved|down|normal)",
     r"i('m| am) fine now",
@@ -34,12 +35,20 @@ RESOLVE_PATTERNS = [
 ]
 
 
-def check_and_apply_ttl(state: PatientState, ttl_seconds: int = DEFAULT_EMERGENCY_TTL_SECONDS) -> bool:
+def check_and_apply_ttl(
+    state_or_session_id: Union[PatientState, str],
+    ttl_seconds: float = DEFAULT_EMERGENCY_TTL_SECONDS
+) -> bool:
     """
     Checks if active emergency has exceeded the TTL threshold.
+    Accepts either a PatientState object or a session_id string.
     If expired, resets active_emergency and marks resolved_emergency='EXPIRED_TTL'.
     Returns True if an expiration occurred, False otherwise.
     """
+    if isinstance(state_or_session_id, str):
+        return get_state_store().check_and_apply_ttl(state_or_session_id, ttl_seconds)
+
+    state = state_or_session_id
     if not state.active_emergency:
         return False
 
@@ -49,14 +58,7 @@ def check_and_apply_ttl(state: PatientState, ttl_seconds: int = DEFAULT_EMERGENC
             f"[StateStore] Emergency {state.active_emergency} exceeded TTL of {ttl_seconds}s. "
             f"Elapsed: {now - state.emergency_timestamp:.1f}s. Resetting emergency state."
         )
-        state.resolved_emergency = "EXPIRED_TTL"
-        state.active_emergency = None
-        state.emergency_turn_count = 0
-        state.active_emergency_topic = None
-        state.emergency_override_served = False
-        # Remove fever from current symptoms if it expired
-        if "fever" in state.current_symptoms:
-            state.current_symptoms.remove("fever")
+        state.reset_emergency(resolution_reason="EXPIRED_TTL")
         return True
 
     return False
@@ -72,16 +74,15 @@ def check_emergency_resolution(user_text: str, state: PatientState) -> bool:
         return False
 
     text = (user_text or "").lower()
+
+    # Clause-bounded negation check for clearance/resolution phrases
+    if re.search(r"\b(not|never|hasn\'?t|haven\'?t|cannot|can\'?t|didn\'?t|won\'?t|no)\b[^.,;!\n]{0,25}\b(cleared|seen|saw|checked|back|discharged|resolved|better|normal)\b", text):
+        return False
+
     for pat in RESOLVE_PATTERNS:
         if re.search(pat, text):
             logger.info(f"[StateStore] Affirmative emergency resolution detected via pattern: '{pat}'")
-            state.resolved_emergency = state.active_emergency
-            state.active_emergency = None
-            state.emergency_turn_count = 0
-            state.emergency_override_served = False
-            state.active_emergency_topic = None
-            if "fever" in state.current_symptoms:
-                state.current_symptoms.remove("fever")
+            state.reset_emergency(resolution_reason=state.active_emergency)
             return True
 
     return False
@@ -101,6 +102,25 @@ class BaseStateStore(ABC):
     @abstractmethod
     def delete(self, session_id: str) -> None:
         pass
+
+    def get_patient_state(self, session_id: str) -> PatientState:
+        state = self.get(session_id)
+        if state is None:
+            state = PatientState()
+            self.set(session_id, state)
+        return state
+
+    def save_patient_state(self, session_id: str, state: PatientState) -> None:
+        self.set(session_id, state)
+
+    def check_and_apply_ttl(self, session_id: str, ttl_seconds: float = DEFAULT_EMERGENCY_TTL_SECONDS) -> bool:
+        state = self.get(session_id)
+        if state and state.active_emergency and state.emergency_timestamp:
+            if (time.time() - state.emergency_timestamp) > ttl_seconds:
+                state.reset_emergency(resolution_reason="TTL_EXPIRED")
+                self.save_patient_state(session_id, state)
+                return True
+        return False
 
 
 import threading
@@ -240,3 +260,7 @@ def reset_state_store() -> None:
     """Resets global state store (primarily for unit tests)."""
     global _GLOBAL_STATE_STORE
     _GLOBAL_STATE_STORE = None
+
+
+state_store: BaseStateStore = get_state_store()
+

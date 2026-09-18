@@ -287,6 +287,8 @@ def generate_voice_response(msg: str, user=None) -> str:
         from services.state_store import get_state_store, check_and_apply_ttl, check_emergency_resolution
         from services.output_guardrails import ClinicalOutputGuardrail
         from services.audit_logger import AuditLogger
+        from research.src.clinical_parser import ClinicalEntityParser
+        from routes.chat import is_greeting_text
 
         state_store = get_state_store()
         patient_state = (state_store.get(str(chat_session.id)) if chat_session else None) or load_patient_state(chat_session)
@@ -295,12 +297,50 @@ def generate_voice_response(msg: str, user=None) -> str:
         if check_emergency_resolution(msg, patient_state) and chat_session:
             AuditLogger.log_emergency_resolved(session_id=str(chat_session.id))
 
+        # Extract per-turn clinical signals
+        signals = ClinicalEntityParser.extract_clinical_signals(msg)
+        patient_state.transient_symptoms = signals.get("active_symptoms", [])
+
+        # Pure greeting bypass
+        is_pure_greeting = is_greeting_text(msg) and not signals.get("has_clinical_signals", False)
+        if is_pure_greeting:
+            first_name = user.name.split()[0] if user and hasattr(user, "name") and user.name else "there"
+            raw_answer = format_context_aware_greeting(patient_state, first_name=first_name, msg=msg)
+            answer = app.apply_output_guardrails(raw_answer, is_medical=False, show_disclaimer=False)
+            if chat_session:
+                bot_msg = Message(session_id=chat_session.id, role="assistant", content=str(answer))
+                db.session.add(bot_msg)
+                save_patient_state(chat_session, patient_state)
+                state_store.set(str(chat_session.id), patient_state)
+                chat_session.updated_at = datetime.now(timezone.utc)
+                db.session.commit()
+            return str(answer)
+
         prev_snapshot = patient_state.get_diff_snapshot()
         patient_state = extract_patient_state(msg, patient_state)
         has_new_structured_fact = patient_state.has_state_diff(prev_snapshot)
 
-        # PRE-INTENT EVALUATION: ClinicalTriageEngine
-        triage_eval = ClinicalTriageEngine.evaluate(msg, patient_state)
+        # PRE-INTENT EVALUATION: ClinicalTriageEngine with extracted signals
+        triage_eval = ClinicalTriageEngine.evaluate(msg, patient_state, signals)
+        if triage_eval and triage_eval.get("tier") == "RESOLVED":
+            if chat_session:
+                AuditLogger.log_emergency_resolved(session_id=str(chat_session.id))
+            raw_answer = triage_eval["message"]
+            answer = app.apply_output_guardrails(
+                raw_answer,
+                is_medical=True,
+                show_disclaimer=False,
+                patient_state=patient_state
+            )
+            if chat_session:
+                bot_msg = Message(session_id=chat_session.id, role="assistant", content=str(answer))
+                db.session.add(bot_msg)
+                save_patient_state(chat_session, patient_state)
+                state_store.set(str(chat_session.id), patient_state)
+                chat_session.updated_at = datetime.now(timezone.utc)
+                db.session.commit()
+            return str(answer)
+
         if triage_eval and triage_eval.get("requires_escalation"):
             patient_state.emergency_override_served = True
             patient_state.risk_tier = "Emergency"

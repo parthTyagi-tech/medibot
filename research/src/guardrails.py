@@ -505,6 +505,7 @@ def apply_output_guardrails(
         .replace("\u201d", '"')
         .replace("\u202f", " ")
         .replace("\u00a0", " ")
+        .replace("\u2248", "~")
     )
 
     # Append or strip disclaimer
@@ -514,6 +515,24 @@ def apply_output_guardrails(
         cleaned = re.sub(r'\*?Disclaimer:\s*MediAssist.*$', '', cleaned, flags=re.IGNORECASE | re.DOTALL).strip()
     elif is_medical and "Disclaimer:" not in cleaned and len(cleaned) > 40:
         cleaned += MEDICAL_DISCLAIMER
+
+    # Clean up trailing incomplete sentence / dangling bullet point if cut off mid-generation
+    body = cleaned
+    disc = ""
+    if "---" in body and "Disclaimer:" in body:
+        parts = body.split("---", 1)
+        body = parts[0]
+        disc = "\n\n---" + parts[1]
+
+    if body and not body.strip().endswith((".", "!", ")", "*", '"', "'")):
+        body_stripped = re.sub(r'[\r\n]+[-*•]\s*[^\r\n.!?)]*$', '', body).strip()
+        if body_stripped and body_stripped.endswith((".", "!", ")", "*", '"', "'")):
+            body = body_stripped
+        else:
+            last_punct = max(body.rfind("."), body.rfind("!"), body.rfind("?"))
+            if last_punct > 40:
+                body = body[:last_punct + 1].strip()
+    cleaned = body + disc
 
     return cleaned
 

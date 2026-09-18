@@ -15,10 +15,9 @@ import os
 import json
 import logging
 import threading
+from logging.handlers import RotatingFileHandler
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List
-
-logger = logging.getLogger("medico-legal-audit")
 
 AUDIT_LOG_DIR = os.getenv("AUDIT_LOG_DIR", "logs")
 AUDIT_LOG_FILE = os.path.join(AUDIT_LOG_DIR, "audit.log")
@@ -28,10 +27,27 @@ _audit_lock = threading.Lock()
 
 class AuditLogger:
     """
-    Thread-safe structured JSON audit logger writing to disk for regulatory & audit compliance.
+    Thread-safe structured JSON audit logger writing to disk with log rotation
+    (10MB max size, 5 backups) for regulatory and clinical compliance.
     """
 
     LOG_PATH = AUDIT_LOG_FILE
+
+    def __init__(self, log_dir: str = AUDIT_LOG_DIR, log_file: str = "audit.log"):
+        os.makedirs(log_dir, exist_ok=True)
+        self.log_path = os.path.join(log_dir, log_file)
+        self._lock = _audit_lock
+        
+        self.logger = logging.getLogger("medibot_audit")
+        self.logger.setLevel(logging.INFO)
+        self.logger.propagate = False
+        
+        if not self.logger.handlers:
+            handler = RotatingFileHandler(
+                self.log_path, maxBytes=10 * 1024 * 1024, backupCount=5, encoding="utf-8"
+            )
+            handler.setFormatter(logging.Formatter("%(message)s"))
+            self.logger.addHandler(handler)
 
     @classmethod
     def _ensure_dir(cls) -> None:
@@ -42,10 +58,11 @@ class AuditLogger:
         cls,
         session_id: str,
         event_type: str,
-        condition: str,
-        rule_triggered: str,
+        condition: Optional[str] = None,
+        rule_triggered: Optional[str] = None,
         raw_tokens_intercepted: Optional[str] = None,
-        client_ip_hash: Optional[str] = None
+        client_ip_hash: Optional[str] = None,
+        details: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """
         Logs a structured audit telemetry record adhering to standard schema.
@@ -56,10 +73,12 @@ class AuditLogger:
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "session_id": str(session_id or "unknown"),
             "event_type": str(event_type),
-            "condition": str(condition),
-            "rule_triggered": str(rule_triggered)
+            "condition": str(condition or "NONE"),
+            "rule_triggered": str(rule_triggered or "DEFAULT")
         }
 
+        if details:
+            record["details"] = details
         if raw_tokens_intercepted is not None:
             record["raw_tokens_intercepted"] = str(raw_tokens_intercepted)
         if client_ip_hash is not None:
@@ -71,9 +90,8 @@ class AuditLogger:
             with _audit_lock:
                 with open(cls.LOG_PATH, "a", encoding="utf-8") as f:
                     f.write(json_line + "\n")
-            logger.info(f"[AuditTelemetry] {event_type} - {condition} - {rule_triggered}")
         except Exception as e:
-            logger.error(f"[AuditTelemetry] Failed to write audit record: {e}")
+            logging.getLogger("medibot_audit").error(f"[AuditTelemetry] Failed to write audit record: {e}")
 
         return record
 
@@ -113,18 +131,22 @@ class AuditLogger:
     def log_guardrail_override(
         cls,
         session_id: str,
-        condition: str,
-        rule_triggered: str,
+        condition_or_reason: Optional[str] = None,
+        rule_triggered: str = "ANTIPYRETIC_CONTRAINDICATION",
         raw_tokens_intercepted: Optional[str] = None,
-        client_ip_hash: Optional[str] = None
+        client_ip_hash: Optional[str] = None,
+        details: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
+        reason = condition_or_reason or "GUARDRAIL_TRIGGERED"
+        d = details or {"reason": reason}
         return cls.log_event(
             session_id=session_id,
             event_type="GUARDRAIL_OVERRIDE",
-            condition=condition,
+            condition=reason,
             rule_triggered=rule_triggered,
             raw_tokens_intercepted=raw_tokens_intercepted,
-            client_ip_hash=client_ip_hash
+            client_ip_hash=client_ip_hash,
+            details=d
         )
 
     @classmethod
@@ -174,6 +196,10 @@ class AuditLogger:
                         if line.strip():
                             events.append(json.loads(line.strip()))
         except Exception as e:
-            logger.error(f"[AuditTelemetry] Error reading audit records: {e}")
+            logging.getLogger("medibot_audit").error(f"[AuditTelemetry] Error reading audit records: {e}")
 
         return events
+
+
+audit_logger: AuditLogger = AuditLogger()
+

@@ -74,6 +74,33 @@ class PatientState:
     emergency_timestamp: Optional[float] = None
     resolved_emergency: Optional[str] = None
 
+    # Diagnostic Intake Data
+    recorded_temperature: Optional[str] = None
+    on_active_chemo: Optional[bool] = None
+    has_central_line_or_port: Optional[bool] = None
+
+    # Active symptoms strictly observed in current session
+    transient_symptoms: List[str] = field(default_factory=list)
+
+    def start_emergency(self, condition: str):
+        self.active_emergency = condition
+        if not self.emergency_timestamp:
+            self.emergency_timestamp = time.time()
+        self.emergency_turn_count += 1
+        self.risk_tier = "Emergency"
+        self.active_emergency_topic = condition.lower()
+
+    def reset_emergency(self, resolution_reason: str = "RESOLVED"):
+        self.active_emergency = None
+        self.emergency_timestamp = None
+        self.emergency_turn_count = 0
+        self.resolved_emergency = resolution_reason
+        self.emergency_override_served = False
+        self.active_emergency_topic = None
+        self.transient_symptoms.clear()
+        if "fever" in self.current_symptoms:
+            self.current_symptoms.remove("fever")
+
     def __getitem__(self, key: str) -> Any:
         if hasattr(self, key):
             return getattr(self, key)
@@ -236,9 +263,33 @@ class ClinicalTriageEngine:
     without sirens, emojis, or repetitive verbatim copy-pasting.
     """
 
-    @staticmethod
-    def evaluate(user_text: str, patient_state: Union[PatientState, Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-        text = (user_text or "").lower()
+    RESOLUTION_KEYWORDS = [
+        r"\b(cleared|discharged)\s+me\b",
+        r"\bback from (the )?(hospital|er|emergency room|clinic)\b", 
+        r"\b(saw|seen)\s+(the\s+|my\s+)?(doctor|oncologist)\b",
+        r"\b(doctor|oncologist)\s+(has\s+)?(checked|saw|cleared|treated|discharged)\b",
+        r"\b(doctor|oncologist)\s+cleared\b",
+        r"\bdischarged\b",
+        r"\bin the er now\b",
+        r"\breceived (iv )?antibiotics\b",
+        r"\bfever is (gone|resolved|down|normal)\b",
+        r"\bfeeling much better\b"
+    ]
+
+    MEDICATION_KEYWORDS = [
+        r"\bsuggest\b", r"\bmedication\b", r"\bmedicine\b", r"\bpill\b", 
+        r"\btablet\b", r"\btake\b", r"\bremedy\b", r"\bcure\b", 
+        r"\btylenol\b", r"\bparacetamol\b", r"\bibuprofen\b", r"\badvil\b"
+    ]
+
+    @classmethod
+    def evaluate(
+        cls, 
+        user_text: str, 
+        patient_state: Union[PatientState, Dict[str, Any]], 
+        signals: Optional[Dict[str, Any]] = None
+    ) -> Optional[Dict[str, Any]]:
+        text_lower = (user_text or "").lower()
 
         # Ensure default keys if patient_state is dict
         if isinstance(patient_state, dict):
@@ -249,161 +300,170 @@ class ClinicalTriageEngine:
             patient_state.setdefault("emergency_timestamp", None)
             patient_state.setdefault("resolved_emergency", None)
 
-        signals = ClinicalEntityParser.extract_clinical_signals(user_text)
+        if signals is None:
+            signals = ClinicalEntityParser.extract_clinical_signals(user_text)
 
-        # 0. Emergency resolution detection
-        resolve_patterns = [
-            r"back from (the )?(hospital|er|emergency room|clinic)",
-            r"doctor (cleared|checked|saw|discharged) me",
-            r"oncologist (cleared|treated|saw|discharged) me",
-            r"received (iv )?antibiotics",
-            r"fever is (gone|resolved|down)",
-            r"i('m| am) fine now",
-        ]
-        if any(re.search(pat, text) for pat in resolve_patterns):
-            if patient_state.get("active_emergency"):
-                patient_state["resolved_emergency"] = patient_state.get("active_emergency")
-                patient_state["active_emergency"] = None
-                patient_state["emergency_turn_count"] = 0
+        # 1. RESOLUTION & STAND-DOWN DETECTION (With Clause Negation Guard)
+        has_resolution_keyword = any(bool(re.search(pat, text_lower)) for pat in cls.RESOLUTION_KEYWORDS)
+        if has_resolution_keyword and patient_state.get("active_emergency"):
+            is_negated = bool(re.search(
+                r"\b(not|never|hasn\'?t|haven\'?t|cannot|can\'?t|didn\'?t|won\'?t|no)\b[^.,;!\n]{0,25}\b(cleared|seen|saw|checked|back|discharged)\b",
+                text_lower
+            ))
+            if not is_negated:
                 if isinstance(patient_state, PatientState):
-                    patient_state.resolved_emergency = patient_state.active_emergency
-                    patient_state.active_emergency = None
-                    patient_state.emergency_turn_count = 0
-            return None
-
-        # 1. Third-Party Relative Entity Attribution Gate
-        is_third_party = signals.get("is_third_party_query", False) or signals.get("cancer_subject") == "third_party" or signals.get("fever_subject") == "third_party"
-        if is_third_party:
-            # If relative has cancer + fever, deliver caregiver emergency triage
-            if signals.get("has_cancer") and signals.get("has_fever"):
-                rel = signals.get("relative_relation") or "relative"
+                    patient_state.reset_emergency(resolution_reason="DOCTOR_EVALUATED")
+                elif isinstance(patient_state, dict):
+                    patient_state["resolved_emergency"] = "DOCTOR_EVALUATED"
+                    patient_state["active_emergency"] = None
+                    patient_state["emergency_turn_count"] = 0
+                    if "fever" in patient_state.get("current_symptoms", []):
+                        patient_state["current_symptoms"].remove("fever")
                 return {
-                    "tier": "Emergency",
-                    "emergency_type": "FEBRILE_NEUTROPENIA_CAREGIVER",
+                    "tier": "RESOLVED",
+                    "condition": "FEBRILE_NEUTROPENIA",
+                    "requires_escalation": False,
                     "message": (
-                        f"**URGENT CAREGIVER GUIDANCE: FEBRILE NEUTROPENIA RISK**\n\n"
-                        f"A fever in an oncology patient (such as your {rel}) is a time-sensitive clinical emergency. "
-                        f"Chemotherapy and oncological treatments deplete infection-fighting white blood cells (neutrophils), "
-                        f"meaning infections can progress to life-threatening sepsis very rapidly.\n\n"
-                        f"**Immediate Action Plan for Your {rel.capitalize()}:**\n"
-                        f"1. **Do not give over-the-counter fever reducers** (such as acetaminophen, paracetamol, ibuprofen, or aspirin) before consulting their oncology team, as suppressing the fever can mask critical infection progression.\n"
-                        f"2. Contact their oncology care team's 24/7 emergency hotline immediately or take them to the nearest Emergency Department.\n"
-                        f"3. Inform the triage staff immediately on arrival that the patient has an active cancer history and is presenting with an acute fever."
-                    ),
-                    "requires_escalation": True,
-                    "turn": 1
+                        "I am glad to hear that you have been evaluated and cleared by your doctor. "
+                        "I will update your current status to reflect that this urgent episode is resolved. "
+                        "Please continue following your care team's guidance, and reach out immediately "
+                        "if new or worsening symptoms develop. How can I help you today?"
+                    )
                 }
-            # Otherwise, third-party query does not mutate patient_state
-            return None
 
-        # 2. Maintain persistent risk indicators for self
-        has_cancer_prev = bool(
-            patient_state.get("has_cancer_history")
-            or patient_state.get("is_active_cancer_chemo")
-            or any("cancer" in str(c).lower() or "chemo" in str(c).lower() for c in patient_state.get("disclosed_conditions", []))
-            or any("cancer" in str(c).lower() or "chemo" in str(c).lower() for c in patient_state.get("conditions", []))
-        )
-
-        if has_cancer_prev or (signals["has_cancer"] and signals["cancer_subject"] == "self"):
-            patient_state["has_cancer_history"] = True
+        # 2. UPDATE PERSISTENT MEDICAL HISTORY (Self-attributed only)
+        if signals.get("has_cancer") and signals.get("cancer_subject") == "self":
             if isinstance(patient_state, PatientState):
                 patient_state.has_cancer_history = True
                 patient_state.is_active_cancer_chemo = True
-                if "cancer" not in [c.lower() for c in patient_state.disclosed_conditions]:
-                    patient_state.disclosed_conditions.append("cancer")
+            elif isinstance(patient_state, dict):
+                patient_state["has_cancer_history"] = True
 
-        # 3. Symptom tracking with negation awareness
-        raw_syms = patient_state.get("current_symptoms", [])
-        current_syms = list(raw_syms) if not isinstance(raw_syms, list) else raw_syms
+        # 3. CAREGIVER ISOLATION (Third-party relative has cancer + fever)
+        if signals.get("cancer_subject") == "third_party" and signals.get("has_fever"):
+            rel = signals.get("relative_relation") or "family member"
+            return {
+                "tier": "Emergency",
+                "emergency_type": "FEBRILE_NEUTROPENIA_CAREGIVER",
+                "condition": "FEBRILE_NEUTROPENIA_CAREGIVER",
+                "message": (
+                    f"Because your {rel} has a history of cancer and currently has a fever, "
+                    f"they require immediate clinical evaluation. Cancer treatments deplete infection-fighting white blood cells, "
+                    f"meaning a fever can signal a fast-progressing infection.\n\n"
+                    f"Please have them contact their oncology team's 24/7 hotline immediately or bring them to the nearest Emergency Department. "
+                    f"Do not administer over-the-counter fever reducers without their oncologist's authorization."
+                ),
+                "requires_escalation": True,
+                "turn": 1
+            }
 
-        if signals["fever_negated"]:
-            if "fever" in current_syms:
-                current_syms.remove("fever")
-        elif signals["has_fever"] and signals.get("fever_subject") != "third_party":
-            if "fever" not in current_syms:
-                current_syms.append("fever")
+        # 4. PURE GREETING CHECK: If pure greeting without clinical signals, defer to greeting handler
+        is_greeting = any(bool(re.search(p, text_lower)) for p in [
+            r"^(hello|hi|hey|good morning|good afternoon|good evening)\b",
+            r"^(how are you|how good are you|how are you doing)\b"
+        ])
+        if is_greeting and not signals.get("has_clinical_signals", False):
+            return None
 
-        for sym in signals.get("extracted_symptoms", []):
-            if sym != "fever" and sym not in current_syms:
-                current_syms.append(sym)
+        # 5. PERSONAL FEBRILE NEUTROPENIA EVALUATION
+        has_cancer = bool(
+            patient_state.get("has_cancer_history")
+            or patient_state.get("is_active_cancer_chemo")
+            or any("cancer" in str(c).lower() for c in patient_state.get("disclosed_conditions", []))
+            or any("cancer" in str(c).lower() for c in patient_state.get("conditions", []))
+        )
+        fever_in_this_turn = signals.get("has_fever") and not signals.get("fever_negated")
+        is_asking_about_ongoing_emergency = (
+            patient_state.get("active_emergency") == "FEBRILE_NEUTROPENIA" and
+            any(w in text_lower for w in ["fever", "temperature", "chills", "sick", "suggest", "medication", "pill", "pain"])
+        )
 
-        patient_state["current_symptoms"] = current_syms
-        if isinstance(patient_state, PatientState):
-            patient_state.current_symptoms = current_syms
-
-        # 4. Check for active emergency: FEBRILE_NEUTROPENIA
-        has_cancer = bool(patient_state.get("has_cancer_history"))
-        has_fever = ("fever" in current_syms or signals["has_fever"]) and not signals["fever_negated"]
-        is_resolved = bool(patient_state.get("resolved_emergency"))
-
-        if has_cancer and has_fever and not is_resolved:
-            # Active emergency trigger
-            patient_state["active_emergency"] = "FEBRILE_NEUTROPENIA"
-            if not patient_state.get("emergency_timestamp"):
-                patient_state["emergency_timestamp"] = time.time()
+        if has_cancer and (fever_in_this_turn or is_asking_about_ongoing_emergency):
             if isinstance(patient_state, PatientState):
-                patient_state.active_emergency = "FEBRILE_NEUTROPENIA"
-                patient_state.risk_tier = "Emergency"
-                patient_state.active_emergency_topic = "febrile_neutropenia"
-                if not patient_state.emergency_timestamp:
-                    patient_state.emergency_timestamp = time.time()
+                patient_state.start_emergency("FEBRILE_NEUTROPENIA")
+            elif isinstance(patient_state, dict):
+                patient_state["active_emergency"] = "FEBRILE_NEUTROPENIA"
+                patient_state["emergency_turn_count"] = patient_state.get("emergency_turn_count", 0) + 1
+                if not patient_state.get("emergency_timestamp"):
+                    patient_state["emergency_timestamp"] = time.time()
+            return cls._generate_intent_specific_triage(user_text, patient_state)
 
-            # Increment emergency_turn_count
-            current_turn = patient_state.get("emergency_turn_count", 0) + 1
-            patient_state["emergency_turn_count"] = current_turn
-            if isinstance(patient_state, PatientState):
-                patient_state.emergency_turn_count = current_turn
+        return None
 
-            # Generate progressive, turn-aware guidance
-            if current_turn == 1:
-                # Turn 1 (Initial Report):
-                # Explain why fever in oncology is an emergency (depleted neutrophils, rapid sepsis progression),
-                # advise immediate contact with the oncology 24/7 on-call line or nearest ED,
-                # instruct not to take fever reducers, and ask high-yield screening questions
-                # (exact thermometer reading, active chemo/steroids, presence of port/PICC line).
-                guidance = (
-                    "**FEBRILE NEUTROPENIA RISK EVALUATION**\n\n"
-                    "Because chemotherapy and oncological treatments deplete infection-fighting white blood cells (neutrophils), "
-                    "a fever in a cancer patient is a medical emergency (FEBRILE NEUTROPENIA) that can progress rapidly to severe sepsis. "
-                    "An immune system suppressed by cancer therapies cannot effectively control systemic infections without prompt medical intervention.\n\n"
-                    "Please do not self-treat the fever without checking with your oncology team first — if you already have a documented plan from them, follow that; otherwise this requires prompt emergency evaluation.\n\n"
-                    "**Immediate Clinical Directives:**\n"
-                    "1. Contact your oncology care team's 24/7 emergency hotline immediately or proceed to the nearest Emergency Department. Upon arrival, inform triage personnel immediately that you have a history of cancer and an active fever.\n"
-                    "2. **Do not take over-the-counter fever reducers** (such as acetaminophen, paracetamol, ibuprofen, or aspirin). Suppressing your fever can mask critical infection progression and delay essential intravenous antibiotic therapy.\n\n"
-                    "**High-Yield Triage Screening Questions:**\n"
-                    "- What is your exact thermometer temperature reading, and what time was it taken?\n"
-                    "- Are you currently on active chemotherapy, immunotherapy, or steroids, and when was your last treatment?\n"
-                    "- Do you have a central venous access device, such as a Port-a-Cath or PICC line?"
-                )
-            elif current_turn == 2 or ("pain" in text or "stomach" in text or "medication" in text or "medicine" in text or "relief" in text):
-                # Turn 2 (Secondary Symptom / Medication Request):
-                # Address symptom relief directly—explain why self-treating secondary symptoms (like stomach pain) right now
-                # can interact with cancer therapies or mask acute pathology. Reiterate reaching the emergency clinic.
-                symptom_phrase = "secondary symptoms such as stomach pain" if ("pain" in text or "stomach" in text) else "secondary symptoms"
-                guidance = (
+    @classmethod
+    def _generate_intent_specific_triage(cls, user_text: str, patient_state: Union[PatientState, Dict[str, Any]]) -> Dict[str, Any]:
+        text_lower = user_text.lower()
+        turn = patient_state.get("emergency_turn_count", 1)
+
+        # Branch A: Medication / Pill / Remedy Inquiry
+        if any(bool(re.search(pat, text_lower)) for pat in cls.MEDICATION_KEYWORDS):
+            if any(w in text_lower for w in ["stomach", "pain", "belly", "abdomen"]):
+                symptom_phrase = "secondary symptoms such as stomach pain"
+                message = (
+                    f"Do not take over-the-counter fever reducers. I cannot recommend any medications or fever reducers for this condition. "
                     f"I understand you are seeking relief for {symptom_phrase}. However, when experiencing a fever alongside a cancer history, "
                     f"attempting to self-treat secondary symptoms with over-the-counter medications carries severe clinical risks. "
                     f"These drugs can irritate your gastrointestinal tract, mask acute intra-abdominal infections, or interact dangerously with your cancer therapies.\n\n"
-                    f"All secondary symptoms must be evaluated in tandem with your fever in an emergency clinical setting. Please proceed to the nearest emergency department "
-                    f"or call your oncology 24/7 triage line immediately and report both your fever and secondary symptoms to the medical staff."
+                    f"**Action required right now:**\n"
+                    f"• Call your oncology 24/7 on-call triage line immediately.\n"
+                    f"• If you cannot reach them within 15 minutes, proceed directly to the nearest Emergency Department.\n"
+                    f"• Inform triage upon arrival: *'I have cancer and I am running a fever.'*"
                 )
             else:
-                # Turn 3+ (Repeated Mild Symptoms / Cold):
-                # Reiterate with calm authority that even mild cold symptoms with a fever require immediate oncology clearance.
-                guidance = (
-                    "Even seemingly mild cold symptoms—such as a runny nose, mild cough, or congestion—require immediate oncology evaluation "
-                    "when accompanied by a fever. In patients with a cancer history or active immunosuppression, an immune system cannot be relied upon "
-                    "to clear routine viral or bacterial infections, and mild presentations can escalate rapidly into life-threatening complications.\n\n"
-                    "Please maintain immediate clinical precautions: contact your oncology team's 24/7 on-call line or proceed to an emergency department right away for direct evaluation and blood cultures."
+                message = (
+                    "Do not take over-the-counter fever reducers. I cannot recommend any medications or fever reducers for this condition. "
+                    "In patients with cancer, taking fever reducers like acetaminophen (Tylenol), ibuprofen, or paracetamol "
+                    "artificially lowers body temperature without treating the underlying infection, which can mask critical progression "
+                    "and delay essential intravenous antibiotics.\n\n"
+                    "**Action required right now:**\n"
+                    "• Call your oncology 24/7 on-call triage line immediately.\n"
+                    "• If you cannot reach them within 15 minutes, proceed directly to the nearest Emergency Department.\n"
+                    "• Inform triage upon arrival: *'I have cancer and I am running a fever.'*"
                 )
 
-            return {
-                "tier": "Emergency",
-                "emergency_type": "FEBRILE_NEUTROPENIA",
-                "message": guidance,
-                "requires_escalation": True,
-                "turn": current_turn
-            }
+        # Branch B: Initial Turn 1 Presentation
+        elif turn == 1:
+            message = (
+                "**FEBRILE NEUTROPENIA EVALUATION REQUIRED**\n\n"
+                "Because you have a history of cancer and are experiencing a fever, this requires immediate clinical evaluation today.\n\n"
+                "**Why this is urgent:** Cancer treatments frequently deplete white blood cells (neutrophils), which are essential "
+                "for fighting infection. In oncology patients, even a mild fever (100.4°F / 38°C or above) can indicate an infection "
+                "that can escalate into sepsis without prompt intravenous antibiotics.\n\n"
+                "**Immediate Actions:**\n"
+                "1. **Call your oncology team's 24/7 triage hotline** right now.\n"
+                "2. **Go to the nearest Emergency Department** if you cannot reach your oncology team immediately.\n"
+                "3. **Do not take fever reducers (such as Tylenol, paracetamol, or ibuprofen)** without checking with your oncology team first.\n\n"
+                "**High-Yield Triage Screening Questions:**\n"
+                "• What is your exact thermometer temperature reading on the thermometer right now?\n"
+                "• Are you currently receiving active chemotherapy, immunotherapy, or steroids?\n"
+                "• Do you have an indwelling port, PICC line, or central venous catheter?"
+            )
+
+        # Branch C: Screening Intake / Vitals Details (Turn 2+)
+        elif re.search(r"\b\d{2,3}(\.\d)?\b", text_lower) or any(w in text_lower for w in ["chemo", "port", "picc"]):
+            message = (
+                "Thank you for sharing those clinical details. Because an oncology patient with an active fever "
+                "is at high risk for febrile neutropenia, this cannot be safely monitored at home.\n\n"
+                "Please connect with your oncology emergency service immediately or proceed to the emergency department "
+                "so clinicians can draw blood cultures and administer IV antibiotics if indicated."
+            )
+
+        # Branch D: Turn 2+ General Check-in
+        else:
+            message = (
+                "I want to reiterate: any fever in an oncology patient requires prompt clinical evaluation to rule out febrile neutropenia.\n\n"
+                "Please do not wait or attempt self-treatment at home. Are you currently on your way to an emergency clinic, "
+                "or have you been able to reach your oncology on-call nurse?"
+            )
+
+        return {
+            "tier": "Emergency",
+            "condition": "FEBRILE_NEUTROPENIA",
+            "emergency_type": "FEBRILE_NEUTROPENIA",
+            "message": message,
+            "requires_escalation": True,
+            "turn": turn
+        }
 
         return None
 
@@ -554,6 +614,7 @@ SYMPTOM_PATTERNS = {
     "cardiac": r"\b(chest\s+pain|chest\s+pressure|palpitations|irregular\s+heartbeat|tightness\s+in\s+chest)\b",
     "neurological": r"\b(severe\s+headache|headache|dizziness|fainting|syncope|confusion|slurred\s+speech|vision\s+loss|blurred\s+vision|blurry\s+vision|seizure|getting\s+confused|confused)\b",
     "gastrointestinal": r"\b(vomiting|diarrhea|abdominal\s+pain|stomach\s+cramps|unable\s+to\s+keep\s+fluids\s+down|dehydration)\b",
+    "pain": r"\b(pain|ache|aching|soreness|hurt|hurting)\b",
     "preeclampsia_signs": r"\b(headache|blurr(y|ed)\s+vision|visual\s+(changes|disturbances)|swelling\s+in\s+(hands|face|feet)|upper\s+right\s+(belly|abdominal)\s+pain|sudden\s+swelling)\b"
 }
 
@@ -779,6 +840,7 @@ def extract_patient_state(user_text: str, current_state: Optional[PatientState] 
 
     # 6. Detect Symptoms
     parser_signals = ClinicalEntityParser.extract_clinical_signals(user_text)
+    state.transient_symptoms = parser_signals.get("active_symptoms", [])
     for symp_type, pattern in SYMPTOM_PATTERNS.items():
         if re.search(pattern, text):
             # Check negation
@@ -936,12 +998,13 @@ def evaluate_triage_tier(
             guidance = triage_eval["message"]
         else:
             guidance = (
+                "**FEBRILE NEUTROPENIA RISK EVALUATION**\n\n"
                 "Because chemotherapy and oncological treatments deplete infection-fighting white blood cells (neutrophils), "
                 "a fever in a cancer patient is a medical emergency that can progress rapidly to severe sepsis. "
                 "An immune system suppressed by cancer therapies cannot effectively control systemic infections without prompt medical intervention.\n\n"
                 "**Immediate Clinical Directives:**\n"
                 "1. Contact your oncology care team's 24/7 emergency hotline immediately or proceed to the nearest Emergency Department. Upon arrival, inform triage personnel immediately that you have a history of cancer and an active fever.\n"
-                "2. **Do not take over-the-counter fever reducers** (such as acetaminophen, paracetamol, ibuprofen, or aspirin). Suppressing your fever can mask critical infection progression and delay essential intravenous antibiotic therapy.\n\n"
+                "2. **Do not take over-the-counter fever reducers** (such as acetaminophen, paracetamol, ibuprofen, or aspirin) without checking with your oncology team first. Suppressing your fever can mask critical infection progression and delay essential intravenous antibiotic therapy.\n\n"
                 "**High-Yield Triage Screening Questions:**\n"
                 "- What is your exact thermometer temperature reading, and what time was it taken?\n"
                 "- Are you currently on active chemotherapy, immunotherapy, or steroids, and when was your last treatment?\n"

@@ -18,14 +18,25 @@ class ClinicalEntityParser:
     Deterministic clinical signal extractor with negation handling and subject attribution.
     """
 
-    # Specified clinical negation patterns
+    # Specified clinical negation patterns (clause-bounded with [^.,;!\n] to prevent punctuation bleed)
     NEGATION_PRECEDING_PATTERN = (
         r"\b(no|without|denies|not\s+having|never\s+had|zero|definitely\s+no|afebrile|negative\s+for)\b"
-        r"[\w\s]{0,25}\b(fever|chills|temperature|warm|pain)\b"
+        r"[^.,;!\n]{0,25}\b(fever|chills|temperature|warm|pain)\b"
     )
     NEGATION_FOLLOWING_PATTERN = (
-        r"\b(fever|chills)\b[\w\s]{0,15}\b(is\s+absent|not\s+present|gone|resolved)\b"
+        r"\b(fever|chills)\b[^.,;!\n]{0,15}\b(is\s+absent|not\s+present|gone|resolved)\b"
     )
+
+    CLINICAL_INTENT_WORDS = [
+        r"\bpain\b", r"\bvomit\b", r"\bvomiting\b", r"\bdiarrhea\b", 
+        r"\bmedication\b", r"\bmedicine\b", r"\bpill\b", r"\btablet\b", 
+        r"\bsuggest\b", r"\bcure\b", r"\bremedy\b", r"\bport\b", r"\bpicc\b",
+        r"\bhypertension\b", r"\basthma\b", r"\bdiabetes\b", r"\binfection\b",
+        r"\bblood\s+pressure\b", r"\bheart\b", r"\bcough\b", r"\bheadache\b",
+        r"\brash\b", r"\bfever\b", r"\bswelling\b", r"\bsymptom\b",
+        r"\bdisease\b", r"\bcondition\b", r"\bdiagnosis\b",
+        r"\bwhat\s+(is|are)\b", r"\btell\s+me\s+about\b", r"\bhow\s+to\s+(treat|manage)\b"
+    ]
 
     # General prefix & postfix lists for broader symptom targets
     NEGATION_PREFIXES = [
@@ -214,6 +225,10 @@ class ClinicalEntityParser:
         relative_relation = rel_match.group(2) if rel_match else None
         is_tp = (cancer_subject == "third_party") or (fever_subject == "third_party") or (relative_relation is not None)
 
+        # 6. Overall Clinical Signal Check (Used to block mixed-intent greeting hijacking)
+        has_clinical_keywords = any(bool(re.search(w, lower_text)) for w in cls.CLINICAL_INTENT_WORDS)
+        has_clinical_signals = has_fever or has_cancer or has_gi_symptoms or has_clinical_keywords
+
         return {
             "has_cancer": has_cancer,
             "cancer_subject": cancer_subject,
@@ -224,6 +239,7 @@ class ClinicalEntityParser:
             "gi_symptoms": gi_symptoms,
             "active_symptoms": active_symptoms,
             "negated_symptoms": negated_symptoms,
+            "has_clinical_signals": has_clinical_signals,
             # Preserved for backward compatibility
             "extracted_symptoms": active_symptoms,
             "is_third_party_query": is_tp,

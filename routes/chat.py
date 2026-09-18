@@ -14,10 +14,24 @@ from flask import (
     current_app
 )
 from flask_login import login_required, current_user
+
+chat_bp = Blueprint("chat", __name__)
+
+GREETING_PATTERNS = [
+    r"^(hi|hello|hey|greetings|howdy|good\s+(morning|afternoon|evening|day)|salutations)\b",
+    r"^how\s+(are\s+you|is\s+it\s+going|do\s+you\s+do|good\s+are\s+you)\b",
+    r"^(what\'?s\s+up|sup|yo)\b",
+]
+
+
+def is_greeting_text(text: str) -> bool:
+    cleaned = (text or "").strip().lower()
+    return any(bool(re.search(pat, cleaned)) for pat in GREETING_PATTERNS)
+
+
 from langchain.chains import create_retrieval_chain
 from langchain.chains.combine_documents import create_stuff_documents_chain
 
-import app as app_module
 from research.src.auth import db, ChatSession, Message
 from research.src.memory import get_user_memory, clear_user_memory
 from deepgram_tts import text_to_speech
@@ -57,8 +71,7 @@ from services.state_store import (
 )
 from services.output_guardrails import ClinicalOutputGuardrail
 from services.audit_logger import AuditLogger
-
-chat_bp = Blueprint("chat", __name__)
+from research.src.clinical_parser import ClinicalEntityParser
 
 
 @chat_bp.route("/health", methods=["GET"])
@@ -214,7 +227,7 @@ def handle_chat_turn(msg: str, user=None) -> str:
         if check_emergency_resolution(msg, patient_state):
             AuditLogger.log_emergency_resolved(session_id=str(chat_session.id))
 
-        # Sync with session["patient_state"]
+        # Sync with session["patient_state"] (persistent medical history only, NOT accumulator symptoms)
         try:
             sess_ps = session.get("patient_state", {})
             if sess_ps:
@@ -224,23 +237,63 @@ def handle_chat_turn(msg: str, user=None) -> str:
                     patient_state.active_emergency = sess_ps.get("active_emergency")
                 if sess_ps.get("emergency_turn_count", 0) > patient_state.emergency_turn_count:
                     patient_state.emergency_turn_count = sess_ps["emergency_turn_count"]
-                if sess_ps.get("current_symptoms"):
-                    for sym in sess_ps["current_symptoms"]:
-                        if sym not in patient_state.current_symptoms:
-                            patient_state.current_symptoms.append(sym)
+                # Stale current_symptoms are not synced across turns to prevent accumulator poisoning
         except Exception:
             pass
+
+        # Extract per-turn clinical signals
+        signals = ClinicalEntityParser.extract_clinical_signals(msg)
+        patient_state.transient_symptoms = signals.get("active_symptoms", [])
+
+        # Pure greeting bypass: Return nurse-grade context-aware greeting without clinical lecture
+        is_pure_greeting = is_greeting_text(msg) and not signals.get("has_clinical_signals", False)
+        if is_pure_greeting:
+            first_name = user.name.split()[0] if user and hasattr(user, "name") and user.name else "there"
+            raw_answer = format_context_aware_greeting(patient_state, first_name=first_name, msg=msg)
+            answer = app_module.apply_output_guardrails(raw_answer, is_medical=False, show_disclaimer=False)
+            bot_msg = Message(session_id=chat_session.id, role="assistant", content=str(answer))
+            db.session.add(bot_msg)
+            save_patient_state(chat_session, patient_state)
+            state_store.set(str(chat_session.id), patient_state)
+            chat_session.updated_at = datetime.now(timezone.utc)
+            db.session.commit()
+            try:
+                session["patient_state"] = patient_state.to_dict()
+            except Exception:
+                pass
+            return str(answer)
 
         prev_snapshot = patient_state.get_diff_snapshot()
         patient_state = extract_patient_state(msg, patient_state, llm=app_module.classifierModel)
         has_new_structured_fact = patient_state.has_state_diff(prev_snapshot)
 
-        # PRE-INTENT EVALUATION: ClinicalTriageEngine
-        triage_eval = ClinicalTriageEngine.evaluate(msg, patient_state)
+        # PRE-INTENT EVALUATION: ClinicalTriageEngine with extracted signals
+        triage_eval = ClinicalTriageEngine.evaluate(msg, patient_state, signals)
         try:
             session["patient_state"] = patient_state.to_dict()
         except Exception:
             pass
+
+        if triage_eval and triage_eval.get("tier") == "RESOLVED":
+            AuditLogger.log_emergency_resolved(session_id=str(chat_session.id))
+            raw_answer = triage_eval["message"]
+            answer = app_module.apply_output_guardrails(
+                raw_answer,
+                is_medical=True,
+                show_disclaimer=False,
+                patient_state=patient_state
+            )
+            bot_msg = Message(session_id=chat_session.id, role="assistant", content=str(answer))
+            db.session.add(bot_msg)
+            save_patient_state(chat_session, patient_state)
+            state_store.set(str(chat_session.id), patient_state)
+            chat_session.updated_at = datetime.now(timezone.utc)
+            db.session.commit()
+            try:
+                session["patient_state"] = patient_state.to_dict()
+            except Exception:
+                pass
+            return str(answer)
 
         if triage_eval and triage_eval.get("requires_escalation"):
             patient_state.emergency_override_served = True
@@ -565,3 +618,17 @@ def tts():
     text = request.form.get("text", "")
     filename = text_to_speech(text)
     return jsonify({"audio_url": f"/{filename}"})
+
+
+def __getattr__(name):
+    if name == "app_module":
+        import app
+        return app
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+try:
+    import app as app_module
+except Exception:
+    pass
+
