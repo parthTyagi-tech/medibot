@@ -14,6 +14,7 @@ Implements:
 import re
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple, Any
+from research.src.intent_classifier import is_third_party_query
 
 # ─────────────────────────────────────────────────────────────
 # 1. Structured Patient State
@@ -58,6 +59,48 @@ class PatientState:
     newly_disclosed_high_risk: Optional[str] = None
     needs_prior_advice_correction: bool = False
 
+    # Emergency override & third-party scoping (v2)
+    emergency_override_served: bool = False
+    active_emergency_topic: Optional[str] = None  # e.g., "febrile_neutropenia", "neonatal_fever"
+    last_reminder_turn_index: int = -1
+    third_party_context: Optional[str] = None
+
+    def get_diff_snapshot(self) -> Dict[str, Any]:
+        """Captures a snapshot of clinically relevant structured facts to detect turn-by-turn state changes."""
+        return {
+            "temperature": self.temperature,
+            "duration": self.duration,
+            "medication_status": self.medication_status,
+            "current_symptoms": list(self.current_symptoms),
+            "reported_symptoms_detail": list(self.reported_symptoms_detail),
+            "disclosed_conditions": list(self.disclosed_conditions),
+            "conditions": list(self.conditions),
+            "is_active_cancer_chemo": self.is_active_cancer_chemo,
+            "is_infant_under_3mo": self.is_infant_under_3mo,
+            "is_pregnant": self.is_pregnant,
+            "is_immunocompromised": self.is_immunocompromised,
+            "active_chemo_confirmed": self.active_chemo_confirmed,
+        }
+
+    def has_state_diff(self, snapshot: Optional[Dict[str, Any]]) -> bool:
+        """Returns True if the structured patient state has acquired new clinical facts compared to snapshot."""
+        if not snapshot:
+            return True
+        return (
+            self.temperature != snapshot.get("temperature")
+            or self.duration != snapshot.get("duration")
+            or self.medication_status != snapshot.get("medication_status")
+            or set(self.current_symptoms) != set(snapshot.get("current_symptoms", []))
+            or set(self.reported_symptoms_detail) != set(snapshot.get("reported_symptoms_detail", []))
+            or set(self.disclosed_conditions) != set(snapshot.get("disclosed_conditions", []))
+            or set(self.conditions) != set(snapshot.get("conditions", []))
+            or self.is_active_cancer_chemo != snapshot.get("is_active_cancer_chemo")
+            or self.is_infant_under_3mo != snapshot.get("is_infant_under_3mo")
+            or self.is_pregnant != snapshot.get("is_pregnant")
+            or self.is_immunocompromised != snapshot.get("is_immunocompromised")
+            or self.active_chemo_confirmed != snapshot.get("active_chemo_confirmed")
+        )
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             "age": self.age,
@@ -83,7 +126,11 @@ class PatientState:
             "contraindications": self.contraindications,
             "disclaimer_shown": self.disclaimer_shown,
             "newly_disclosed_high_risk": self.newly_disclosed_high_risk,
-            "needs_prior_advice_correction": self.needs_prior_advice_correction
+            "needs_prior_advice_correction": self.needs_prior_advice_correction,
+            "emergency_override_served": self.emergency_override_served,
+            "active_emergency_topic": self.active_emergency_topic,
+            "last_reminder_turn_index": self.last_reminder_turn_index,
+            "third_party_context": self.third_party_context
         }
 
     @classmethod
@@ -114,8 +161,26 @@ class PatientState:
             contraindications=data.get("contraindications", []),
             disclaimer_shown=data.get("disclaimer_shown", False),
             newly_disclosed_high_risk=data.get("newly_disclosed_high_risk"),
-            needs_prior_advice_correction=data.get("needs_prior_advice_correction", False)
+            needs_prior_advice_correction=data.get("needs_prior_advice_correction", False),
+            emergency_override_served=data.get("emergency_override_served", False),
+            active_emergency_topic=data.get("active_emergency_topic"),
+            last_reminder_turn_index=data.get("last_reminder_turn_index", -1),
+            third_party_context=data.get("third_party_context")
         )
+
+    def to_json(self) -> str:
+        import json
+        return json.dumps(self.to_dict())
+
+    @classmethod
+    def from_json(cls, json_str: str) -> "PatientState":
+        import json
+        if not json_str:
+            return cls()
+        try:
+            return cls.from_dict(json.loads(json_str))
+        except Exception:
+            return cls()
 
 
 # ─────────────────────────────────────────────────────────────
@@ -227,9 +292,9 @@ PATIENT_CONDITION_PATTERNS = {
 
 SYMPTOM_PATTERNS = {
     "fever": r"\b(fever|temperature|high\s+temp|feverish|chills|shivering|burning\s+up|\d+(\.\d+)?\s*(f|c|degrees))\b",
-    "respiratory": r"\b(shortness\s+of\s+breath|difficulty\s+breathing|wheezing|cough|coughing|sore\s+throat|stridor)\b",
+    "respiratory": r"\b(shortness\s+of\s+breath|difficulty\s+breathing|wheezing|cough|coughing|sore\s+throat|stridor|cannot\s+breathe|can\'?t\s+breathe|trouble\s+breathing|unable\s+to\s+breathe)\b",
     "cardiac": r"\b(chest\s+pain|chest\s+pressure|palpitations|irregular\s+heartbeat|tightness\s+in\s+chest)\b",
-    "neurological": r"\b(severe\s+headache|headache|dizziness|fainting|syncope|confusion|slurred\s+speech|vision\s+loss|blurred\s+vision|blurry\s+vision|seizure)\b",
+    "neurological": r"\b(severe\s+headache|headache|dizziness|fainting|syncope|confusion|slurred\s+speech|vision\s+loss|blurred\s+vision|blurry\s+vision|seizure|getting\s+confused|confused)\b",
     "gastrointestinal": r"\b(vomiting|diarrhea|abdominal\s+pain|stomach\s+cramps|unable\s+to\s+keep\s+fluids\s+down|dehydration)\b",
     "preeclampsia_signs": r"\b(headache|blurr(y|ed)\s+vision|visual\s+(changes|disturbances)|swelling\s+in\s+(hands|face|feet)|upper\s+right\s+(belly|abdominal)\s+pain|sudden\s+swelling)\b"
 }
@@ -283,6 +348,12 @@ def extract_patient_state(user_text: str, current_state: Optional[PatientState] 
     """
     state = current_state or PatientState()
     text = user_text.lower().strip()
+
+    # Guard: Third-party inquiries must never mutate patient's personal clinical facts
+    is_tp, tp_label = is_third_party_query(user_text)
+    if is_tp:
+        state.third_party_context = user_text.strip()
+        return state
 
     # 0. Primary: Structured LLM extraction if LLM is provided
     llm_data = extract_patient_state_llm(user_text, llm)
@@ -410,6 +481,8 @@ def extract_patient_state(user_text: str, current_state: Optional[PatientState] 
     if stand_down_match:
         state.active_chemo_confirmed = False
         state.stand_down_reason = "Affirmative disclosure: treatment ended >12 months ago with no active therapy"
+        state.emergency_override_served = False
+        state.active_emergency_topic = None
 
     # Detect other high-risk conditions
     for cond_type, patterns in PATIENT_CONDITION_PATTERNS.items():
@@ -453,11 +526,21 @@ def extract_patient_state(user_text: str, current_state: Optional[PatientState] 
                 state.current_symptoms.append(symp_type)
             if symp_type == "fever" and "fever" not in [s.lower() for s in state.reported_symptoms_detail]:
                 state.reported_symptoms_detail.append("fever")
-            elif symp_type == "respiratory" and "cough" not in [s.lower() for s in state.reported_symptoms_detail]:
-                if "dry cough" in text:
+            elif symp_type == "respiratory":
+                if "dry cough" in text and "dry cough" not in [s.lower() for s in state.reported_symptoms_detail]:
                     state.reported_symptoms_detail.append("dry cough")
-                elif "cough" in text:
+                elif "cough" in text and "cough" not in [s.lower() for s in state.reported_symptoms_detail]:
                     state.reported_symptoms_detail.append("cough")
+                elif ("breathe" in text or "breath" in text) and not any(b in [s.lower() for s in state.reported_symptoms_detail] for b in ["difficulty breathing", "shortness of breath", "cannot breathe"]):
+                    state.reported_symptoms_detail.append("difficulty breathing")
+            elif symp_type == "neurological":
+                if ("confus" in text) and "confusion" not in [s.lower() for s in state.reported_symptoms_detail]:
+                    state.reported_symptoms_detail.append("confusion")
+                elif "headache" in text and "headache" not in [s.lower() for s in state.reported_symptoms_detail]:
+                    state.reported_symptoms_detail.append("headache")
+            elif symp_type == "cardiac":
+                if "chest pain" in text and "chest pain" not in [s.lower() for s in state.reported_symptoms_detail]:
+                    state.reported_symptoms_detail.append("chest pain")
 
     return state
 
@@ -466,17 +549,77 @@ def extract_patient_state(user_text: str, current_state: Optional[PatientState] 
 # 4. Triage Evaluation & Red-Flag Override Engine
 # ─────────────────────────────────────────────────────────────
 
-def evaluate_triage_tier(state: PatientState, latest_user_msg: str) -> Tuple[str, List[str], Optional[str]]:
+def friendly_emergency_label(topic: Optional[str]) -> str:
+    """Returns a natural, non-alarmist label for the active emergency topic."""
+    labels = {
+        "febrile_neutropenia": "fever and cancer history",
+        "neonatal_fever": "infant fever",
+        "preeclampsia": "pregnancy-related symptoms",
+        "cardiovascular_respiratory": "chest pain or severe breathing difficulty",
+    }
+    return labels.get(topic, "urgent medical symptoms")
+
+
+def maybe_append_emergency_reminder(raw_answer: str, patient_state: PatientState, turn_count: int, msg: str) -> str:
+    """
+    Appends a dynamically built one-line emergency reminder if an emergency override was previously served,
+    enforcing a cool-down so it only triggers on the first topic-shift turn or after 5+ intervening turns.
+    """
+    if not (patient_state.emergency_override_served and patient_state.active_emergency_topic):
+        return raw_answer
+
+    is_parting = bool(re.search(r"\b(bye|goodbye|thanks|thank\s+you|ok\s+thanks|leaving)\b", msg.lower()))
+    should_remind = (patient_state.last_reminder_turn_index == -1) or ((turn_count - patient_state.last_reminder_turn_index) >= 5) or is_parting
+
+    if should_remind:
+        topic_label = friendly_emergency_label(patient_state.active_emergency_topic)
+        patient_state.last_reminder_turn_index = turn_count
+        return f"{raw_answer}\n\n*(Reminder: please also follow up on the {topic_label} we discussed earlier.)*"
+
+    return raw_answer
+
+
+def evaluate_triage_tier(
+    state: PatientState,
+    latest_user_msg: str,
+    has_new_structured_fact: bool = True
+) -> Tuple[str, List[str], Optional[str]]:
     """
     Evaluates patient state against AUDITABLE_TRIAGE_MATRIX with widened safety margins.
     Returns: (RiskTier, RedFlags, PrimaryActionGuidance)
     """
     text = latest_user_msg.lower()
     red_flags = []
+
+    # 0. Third-Party Query Gate:
+    # If the user query is about another person, do not mutate risk tier or trigger personal emergency overrides.
+    is_tp, _ = is_third_party_query(latest_user_msg)
+    if is_tp:
+        return state.risk_tier, red_flags, None
     
     # 1. Critical Red-Flag Intersections (Immediate Emergency Tier)
     
-    # A. Chemo / Cancer / Immunocompromised + Fever/Infection (WIDENED TRIGGER)
+    # A. Acute General Red-Flags (Chest pain, stroke, severe respiratory distress)
+    has_airway_cardiac = (
+        "cardiac" in state.current_symptoms
+        or any(s in ("cannot breathe", "difficulty breathing", "chest pain", "shortness of breath") for s in state.reported_symptoms_detail)
+        or bool(re.search(r"\b(crushing\s+chest\s+pain|chest\s+pressure|radiating\s+to\s+arm|stroke|slurred\s+speech|cannot\s+breathe|can\'?t\s+breathe)\b", text))
+    )
+    if has_airway_cardiac:
+        red_flags.append("Acute Cardiovascular / Neurological / Airway Emergency")
+        state.risk_tier = "Emergency"
+        state.active_emergency_topic = "cardiovascular_respiratory"
+        emergency_guidance = (
+            "🚨 **LIFE-THREATENING EMERGENCY: CALL 911 / 112 / 999 IMMEDIATELY**\n"
+            "Your symptoms indicate potential acute cardiac, neurological, or severe respiratory distress.\n"
+            "**ACTION REQUIRED NOW:** Call emergency services immediately. Do not drive yourself to the hospital."
+        )
+        if (not state.emergency_override_served) or has_new_structured_fact:
+            return "Emergency", red_flags, emergency_guidance
+        else:
+            return "Emergency", red_flags, None
+
+    # B. Chemo / Cancer / Immunocompromised + Fever/Infection (WIDENED TRIGGER)
     has_cancer = (
         state.is_active_cancer_chemo
         or any(c.lower() in ("cancer", "active chemotherapy/cancer", "chemo", "chemotherapy") for c in state.disclosed_conditions)
@@ -494,6 +637,8 @@ def evaluate_triage_tier(state: PatientState, latest_user_msg: str) -> Tuple[str
         # Check for explicit affirmative stand-down disclosure
         if state.active_chemo_confirmed is False:
             state.risk_tier = "Urgent"
+            state.emergency_override_served = False
+            state.active_emergency_topic = None
             red_flags.append("High Prolonged Fever with Completed Cancer Treatment")
             return "Urgent", red_flags, (
                 "⚠️ **URGENT CLINICAL EVALUATION RECOMMENDED**\n\n"
@@ -507,7 +652,8 @@ def evaluate_triage_tier(state: PatientState, latest_user_msg: str) -> Tuple[str
 
         red_flags.append("Febrile Neutropenia Risk (Cancer History + Fever)")
         state.risk_tier = "Emergency"
-        return "Emergency", red_flags, (
+        state.active_emergency_topic = "febrile_neutropenia"
+        guidance = (
             "🚨 **CRITICAL MEDICAL EMERGENCY: FEBRILE NEUTROPENIA RISK**\n\n"
             "Because you have mentioned cancer along with an active fever, please **do not self-treat the fever without checking with your oncology team first** — "
             "if you already have a specific, documented plan from them for this situation, follow that; otherwise this combination requires **prompt emergency evaluation** "
@@ -517,12 +663,17 @@ def evaluate_triage_tier(state: PatientState, latest_user_msg: str) -> Tuple[str
             "2. **Do not take over-the-counter antipyretics** (acetaminophen, paracetamol, ibuprofen) or home remedies without specialist clearance, as suppressing the fever can mask life-threatening infection progression.\n\n"
             "*(Guideline Reference: ASCO/IDSA Clinical Practice Guidelines for Antimicrobial Prophylaxis and Outpatient Management of Fever and Neutropenia in Adults Treated for Malignancy)*"
         )
+        if (not state.emergency_override_served) or has_new_structured_fact:
+            return "Emergency", red_flags, guidance
+        else:
+            return "Emergency", red_flags, None
 
-    # B. Infant < 3 months + Fever
+    # C. Infant < 3 months + Fever
     if state.is_infant_under_3mo and ("fever" in state.current_symptoms or re.search(SYMPTOM_PATTERNS["fever"], text)):
         red_flags.append("Neonatal Sepsis Risk (Infant <3 months + Fever >=38.0C/100.4F)")
         state.risk_tier = "Emergency"
-        return "Emergency", red_flags, (
+        state.active_emergency_topic = "neonatal_fever"
+        guidance = (
             "🚨 **CRITICAL PEDIATRIC EMERGENCY: NEONATAL FEVER EVALUATION REQUIRED**\n"
             "In infants younger than 3 months (<= 90 days), a fever of **38.0°C (100.4°F) or higher requires immediate in-person emergency hospital evaluation**.\n"
             "**ACTION REQUIRED NOW:**\n"
@@ -530,8 +681,12 @@ def evaluate_triage_tier(state: PatientState, latest_user_msg: str) -> Tuple[str
             "2. **DO NOT administer over-the-counter fever medicines (paracetamol/ibuprofen)** before clinical examination, as an urgent medical workup (blood/urine/CSF) is required.\n"
             "*(Guideline Reference: American Academy of Pediatrics (AAP) Clinical Practice Guideline on the Febrile Infant)*"
         )
+        if (not state.emergency_override_served) or has_new_structured_fact:
+            return "Emergency", red_flags, guidance
+        else:
+            return "Emergency", red_flags, None
 
-    # C. Pregnancy + Preeclampsia or Severe Symptoms
+    # D. Pregnancy + Preeclampsia or Severe Symptoms
     if state.is_pregnant and (
         re.search(SYMPTOM_PATTERNS["preeclampsia_signs"], text)
         or ("neurological" in state.current_symptoms and re.search(r"\b(headache|vision|blurred|swelling)\b", text))
@@ -539,22 +694,17 @@ def evaluate_triage_tier(state: PatientState, latest_user_msg: str) -> Tuple[str
     ):
         red_flags.append("Obstetric High-Risk / Preeclampsia Alert")
         state.risk_tier = "Emergency"
-        return "Emergency", red_flags, (
+        state.active_emergency_topic = "preeclampsia"
+        guidance = (
             "🚨 **URGENT OBSTETRIC ALERT: IMMEDIATE CLINICAL EVALUATION REQUIRED**\n"
             "In pregnancy, severe headaches, visual disturbances, or high fever require immediate evaluation to rule out preeclampsia and maternal-fetal complications.\n"
             "**ACTION REQUIRED NOW:** Contact your obstetrician or proceed to Labor & Delivery Triage / Emergency immediately.\n"
             "*(Guideline Reference: ACOG Practice Bulletin on Gestational Hypertension and Preeclampsia)*"
         )
-
-    # D. Acute General Red-Flags (Chest pain, stroke, severe respiratory distress)
-    if "cardiac" in state.current_symptoms or re.search(r"\b(crushing\s+chest\s+pain|chest\s+pressure|radiating\s+to\s+arm|stroke|slurred\s+speech|cannot\s+breathe)\b", text):
-        red_flags.append("Acute Cardiovascular / Neurological / Airway Emergency")
-        state.risk_tier = "Emergency"
-        return "Emergency", red_flags, (
-            "🚨 **LIFE-THREATENING EMERGENCY: CALL 911 / 112 / 999 IMMEDIATELY**\n"
-            "Your symptoms indicate potential acute cardiac, neurological, or severe respiratory distress.\n"
-            "**ACTION REQUIRED NOW:** Call emergency services immediately. Do not drive yourself to the hospital."
-        )
+        if (not state.emergency_override_served) or has_new_structured_fact:
+            return "Emergency", red_flags, guidance
+        else:
+            return "Emergency", red_flags, None
 
     # 2. Urgent Tier (High prolonged fever, chronic disease exacerbation)
     if ("asthma" in str(state.conditions).lower() or "copd" in str(state.conditions).lower() or state.is_elderly) and "respiratory" in state.current_symptoms:

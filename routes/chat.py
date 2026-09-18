@@ -1,4 +1,5 @@
 import os
+import re
 import random
 import threading
 import traceback
@@ -25,8 +26,11 @@ from research.src.clinical_triage import (
     extract_patient_state,
     evaluate_triage_tier,
     check_medication_contraindications,
-    check_mid_conversation_correction
+    check_mid_conversation_correction,
+    friendly_emergency_label,
+    maybe_append_emergency_reminder
 )
+from research.src.intent_classifier import is_third_party_query
 from services.chat_service import (
     get_active_session,
     build_history_text,
@@ -172,10 +176,11 @@ def chat():
         if msg_count >= 6 and msg_count % 4 == 0:
             enqueue_session_summarize(chat_session.id, msg_count)
 
-
         # Load or initialize structured patient state (DB-backed)
         patient_state = load_patient_state(chat_session)
+        prev_snapshot = patient_state.get_diff_snapshot()
         patient_state = extract_patient_state(msg, patient_state, llm=app_module.classifierModel)
+        has_new_structured_fact = patient_state.has_state_diff(prev_snapshot)
 
         # Check for mid-conversation high-risk disclosure correction
         correction_alert = check_mid_conversation_correction(patient_state, history_text)
@@ -183,15 +188,39 @@ def chat():
         # Check medication & dosing contraindications
         dosing_blocked, dosing_refusal = check_medication_contraindications(patient_state, msg)
 
-        # Evaluate clinical triage risk tier & red-flag overrides
-        risk_tier, red_flags, override_guidance = evaluate_triage_tier(patient_state, msg)
+        # Evaluate clinical triage risk tier & red-flag overrides with state-diff awareness
+        risk_tier, red_flags, override_guidance = evaluate_triage_tier(
+            patient_state, msg, has_new_structured_fact=has_new_structured_fact
+        )
         patient_state.risk_tier = risk_tier
         patient_state.red_flags = red_flags
 
         retrieved_chunks = []
 
+        # Ambiguous pronoun/follow-up check ("in this case", "suggest medication in this case")
+        is_ambiguous_case_query = bool(re.search(
+            r"\b(in\s+this\s+case|in\s+that\s+case|for\s+this\s+case|in\s+this\s+situation)\b",
+            msg.lower()
+        )) or (
+            bool(re.search(r"\b(suggest\s+(some\s+)?medication|things\s+to\s+avoid)\b", msg.lower()))
+            and bool(re.search(r"\b(this\s+case|that\s+case)\b", msg.lower()))
+        )
+
+        if is_ambiguous_case_query and patient_state.third_party_context and patient_state.emergency_override_served:
+            answer = (
+                "Just to make sure I answer the right thing — are you asking about supporting your friend, "
+                "or about your own fever/cancer situation from earlier?"
+            )
+            bot_msg = Message(session_id=chat_session.id, role="assistant", content=answer)
+            db.session.add(bot_msg)
+            save_patient_state(chat_session, patient_state)
+            chat_session.updated_at = datetime.now(timezone.utc)
+            db.session.commit()
+            return answer
+
         # Handle Immediate Red-Flag Overrides (e.g. Febrile Neutropenia / Neonatal Fever / Emergency)
         if override_guidance and risk_tier == "Emergency":
+            patient_state.emergency_override_served = True
             raw_answer = override_guidance
             if correction_alert:
                 raw_answer = f"{correction_alert}\n\n{raw_answer}"
@@ -214,6 +243,32 @@ def chat():
                 patient_state=patient_state,
                 triage_tier=risk_tier
             )
+
+        elif intent == "third_party_query" or is_third_party_query(msg)[0]:
+            _, rel = is_third_party_query(msg)
+            patient_state.third_party_context = rel or "third party"
+            third_party_prompt = (
+                f"You are MediAssist, an empathetic medical AI assistant. "
+                f"The user is asking how to help or support someone else:\n"
+                f"User message: '{msg}'\n\n"
+                f"Provide compassionate, practical guidance on how to support this person. "
+                f"If the concern involves mental health or depression, suggest empathetic listening, being there for them, "
+                f"encouraging them to speak with a healthcare professional or counselor, and sharing available crisis resources (like 988 Suicide & Crisis Lifeline). "
+                f"Do not address the user as if they are the patient. Do not discuss emergency oncology or hospital directives."
+            )
+            try:
+                raw_resp = app_module.chatModel.invoke(third_party_prompt)
+                raw_answer = raw_resp.content if hasattr(raw_resp, "content") else str(raw_resp)
+            except Exception:
+                raw_answer = (
+                    "When supporting a friend or loved one dealing with depression or emotional distress, "
+                    "one of the most helpful things you can do is listen without judgment, let them know they are not alone, "
+                    "and encourage them to reach out to a doctor, counselor, or mental health professional. "
+                    "If they are in crisis, they can call or text the Suicide & Crisis Lifeline at 988."
+                )
+
+            raw_answer = maybe_append_emergency_reminder(raw_answer, patient_state, msg_count, msg)
+            answer = app_module.apply_output_guardrails(raw_answer, is_medical=False, show_disclaimer=False)
 
         elif intent == "medical_query":
             dynamic_prompt = app_module.build_prompt(history_text, user_memory, patient_state=patient_state)
@@ -241,6 +296,8 @@ def chat():
             # Only show legal disclaimer on the initial medical turn; suppress on follow-up and medication responses
             is_med_inquiry = any(kw in msg.lower() for kw in ["medication", "medicine", "drug", "pill", "tablet", "dose", "dosing", "syrup"])
             show_disc = (not patient_state.disclaimer_shown) and not is_med_inquiry
+
+            raw_answer = maybe_append_emergency_reminder(raw_answer, patient_state, msg_count, msg)
 
             answer = app_module.apply_output_guardrails(
                 raw_answer,

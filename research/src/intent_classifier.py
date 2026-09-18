@@ -1,4 +1,6 @@
 import re
+from typing import Tuple, Optional
+from research.src.guardrails import is_code_or_programming_request
 
 # Comprehensive list of medical keyword roots for instant 0ms classification
 MEDICAL_KEYWORDS = {
@@ -28,6 +30,32 @@ NON_MEDICAL_KEYWORDS = {
     "homework", "movie", "song", "lyrics", "game", "recipe"
 }
 
+THIRD_PARTY_PATTERNS = [
+    (r"\bmy\s+(friend|buddy|pal|roommate|colleague|coworker)(\s+[a-zA-Z]+)?\b", "friend"),
+    (r"\bmy\s+(mom|mother|dad|father|parent|parents)\b", "parent"),
+    (r"\bmy\s+(brother|sister|sibling)\b", "sibling"),
+    (r"\bmy\s+(son|daughter|child|kid)\b", "child"),
+    (r"\bmy\s+(wife|husband|partner|spouse)\b", "partner"),
+    (r"\bmy\s+(cousin|uncle|aunt|nephew|niece|grandma|grandmother|grandpa|grandfather)\b", "relative"),
+    (r"\b(someone\s+i\s+know|for\s+a\s+friend|asking\s+for\s+a\s+friend)\b", "friend"),
+    (r"\babout\s+my\s+(friend|mom|mother|dad|father|brother|sister|son|daughter|wife|husband|partner)\b", "third_party"),
+]
+
+COMPILED_THIRD_PARTY_PATTERNS = [(re.compile(p, re.IGNORECASE), label) for p, label in THIRD_PARTY_PATTERNS]
+
+
+def is_third_party_query(text: str) -> Tuple[bool, Optional[str]]:
+    """
+    Detects if the query is asked on behalf of another person (third party).
+    Returns (is_third_party, relationship_label).
+    """
+    if not text or not isinstance(text, str):
+        return False, None
+    for pattern, label in COMPILED_THIRD_PARTY_PATTERNS:
+        if pattern.search(text):
+            return True, label
+    return False, None
+
 
 def classify_intent(chatModel, message: str) -> str:
     if not message or not isinstance(message, str):
@@ -35,6 +63,11 @@ def classify_intent(chatModel, message: str) -> str:
 
     msg_clean = message.strip().lower()
     msg_words = set(re.findall(r"\b[a-zA-Z]+\b", msg_clean))
+
+    # 0. Canonical code/script/programming request check (Single Source of Truth)
+    # Must evaluate first, independently of any medical keywords in the message
+    if is_code_or_programming_request(message):
+        return "general_chat"
 
     # 1. Account action detection
     account_phrases = [
@@ -61,15 +94,20 @@ def classify_intent(chatModel, message: str) -> str:
     if any(phrase in msg_clean for phrase in memory_phrases):
         return "memory_recall"
 
-    # 4. Instant Medical Query heuristic
-    if any(keyword in msg_clean for keyword in MEDICAL_KEYWORDS) or any(w in MEDICAL_KEYWORDS for w in msg_words):
-        return "medical_query"
+    # 4. Third-party health / support query detection
+    is_tp, _ = is_third_party_query(message)
+    if is_tp:
+        return "third_party_query"
 
-    # 5. Instant Non-Medical heuristic
+    # 5. Instant Non-Medical heuristic (evaluated before general medical keywords)
     if any(w in NON_MEDICAL_KEYWORDS for w in msg_words):
         return "general_chat"
 
-    # 6. LLM Classification fallback for edge cases
+    # 6. Instant Medical Query heuristic
+    if any(keyword in msg_clean for keyword in MEDICAL_KEYWORDS) or any(w in MEDICAL_KEYWORDS for w in msg_words):
+        return "medical_query"
+
+    # 7. LLM Classification fallback for edge cases
     prompt = f"""You are a strict intent classifier for MediAssist, a specialized medical assistant.
 Classify the user's message into exactly ONE of the following:
 - greeting
@@ -86,7 +124,7 @@ User: {message}"""
         response = chatModel.invoke(prompt)
         content = (response.content if hasattr(response, "content") else str(response)).strip().lower()
         
-        allowed_intents = ["medical_query", "greeting", "memory_recall", "account_action", "general_chat"]
+        allowed_intents = ["medical_query", "greeting", "memory_recall", "account_action", "third_party_query", "general_chat"]
         for intent in allowed_intents:
             if intent in content:
                 return intent

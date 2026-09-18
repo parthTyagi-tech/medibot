@@ -286,12 +286,16 @@ def generate_voice_response(msg: str, user=None) -> str:
 
         # Load persisted patient state from DB (parity with text path)
         patient_state = load_patient_state(chat_session)
+        prev_snapshot = patient_state.get_diff_snapshot()
         patient_state = extract_patient_state(msg, patient_state)
+        has_new_structured_fact = patient_state.has_state_diff(prev_snapshot)
 
         # Clinical triage: red-flag overrides & risk tier
         correction_alert = check_mid_conversation_correction(patient_state, history_text)
         dosing_blocked, dosing_refusal = check_medication_contraindications(patient_state, msg)
-        risk_tier, red_flags, override_guidance = evaluate_triage_tier(patient_state, msg)
+        risk_tier, red_flags, override_guidance = evaluate_triage_tier(
+            patient_state, msg, has_new_structured_fact=has_new_structured_fact
+        )
         patient_state.risk_tier = risk_tier
         patient_state.red_flags = red_flags
 
@@ -301,6 +305,7 @@ def generate_voice_response(msg: str, user=None) -> str:
 
         # Handle Immediate Red-Flag Overrides (Emergency triage)
         if override_guidance and risk_tier == "Emergency":
+            patient_state.emergency_override_served = True
             raw_answer = override_guidance
             if correction_alert:
                 raw_answer = f"{correction_alert}\n\n{raw_answer}"

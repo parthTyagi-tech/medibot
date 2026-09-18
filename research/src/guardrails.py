@@ -162,6 +162,37 @@ def check_content_safety(text: str) -> Tuple[bool, Optional[str]]:
 
 
 # ─────────────────────────────────────────────────────────────
+# 3b. Code & Programming Generation Filter
+# ─────────────────────────────────────────────────────────────
+
+CODE_REQUEST_PATTERNS = [
+    r"\b(write|create|generate|give\s+me|show\s+me|build|make|provide|need|print)\s+.*(code|script|program|class|function|sql|query|algorithm|app|bot|snippet)\b",
+    r"\b(python|javascript|typescript|java|c\+\+|c#|ruby|golang|rust|html|css|sql|bash|powershell)\s+(code|script|program|class|function|snippet|query|example)\b",
+    r"\b(write|create|code|script)\s+.*(in|using|with)\s+(python|javascript|typescript|java|c\+\+|c#|sql|bash)\b",
+    r"\bwrite\s+(me\s+)?(a\s+)?(python|script|code|program|sql|function|class)\b",
+    r"\b(how\s+to\s+(code|program|script))\b",
+    r"\b(sql\s+query|database\s+query)\b",
+    r"\b(script\s+to\s+(track|scrape|run|calculate|automate|manage))\b",
+]
+
+COMPILED_CODE_PATTERNS = [re.compile(p, re.IGNORECASE) for p in CODE_REQUEST_PATTERNS]
+
+
+def is_code_or_programming_request(text: str) -> bool:
+    """
+    Canonical single source of truth for detecting code, script, programming, or developer requests.
+    Evaluates independently of medical keywords.
+    """
+    if not text or not isinstance(text, str):
+        return False
+    cleaned = text.strip()
+    for pattern in COMPILED_CODE_PATTERNS:
+        if pattern.search(cleaned):
+            return True
+    return False
+
+
+# ─────────────────────────────────────────────────────────────
 # 4. Master Input Guardrail Pipeline
 # ─────────────────────────────────────────────────────────────
 
@@ -170,7 +201,8 @@ def apply_input_guardrails(user_input: str) -> Tuple[bool, str, Optional[str]]:
     Runs all input guardrails in priority order:
     1. Prompt Injection
     2. Harmful Content
-    3. Medical Emergency
+    3. Non-medical Code / Script Request
+    4. Medical Emergency
     
     Returns:
     - (is_blocked, guardrail_category, response_message)
@@ -191,7 +223,11 @@ def apply_input_guardrails(user_input: str) -> Tuple[bool, str, Optional[str]]:
     if not is_safe:
         return True, "content_safety", safety_msg
 
-    # 3. Check acute medical emergency
+    # 3. Check non-medical code / script generation request
+    if is_code_or_programming_request(user_input):
+        return True, "non_medical_code", NON_MEDICAL_REFUSAL
+
+    # 4. Check acute medical emergency
     is_emergency, emergency_msg = detect_medical_emergency(user_input)
     if is_emergency:
         return True, "medical_emergency", emergency_msg
