@@ -23,6 +23,8 @@ from research.src.memory import get_user_memory, clear_user_memory
 from deepgram_tts import text_to_speech
 from research.src.clinical_triage import (
     PatientState,
+    ClinicalTriageEngine,
+    format_context_aware_greeting,
     extract_patient_state,
     evaluate_triage_tier,
     check_medication_contraindications,
@@ -48,6 +50,13 @@ from services.task_dispatcher import (
     enqueue_eval_safety_check,
     enqueue_eval_turn
 )
+from services.state_store import (
+    get_state_store,
+    check_and_apply_ttl,
+    check_emergency_resolution
+)
+from services.output_guardrails import ClinicalOutputGuardrail
+from services.audit_logger import AuditLogger
 
 chat_bp = Blueprint("chat", __name__)
 
@@ -126,17 +135,41 @@ def load_session(session_id):
     })
 
 
-@chat_bp.route("/get", methods=["POST"], endpoint="chat")
-@login_required
-def chat():
-    msg = request.form.get("msg", "").strip()
-    if not msg:
+def handle_chat_turn(msg: str, user=None) -> str:
+    """
+    Request lifecycle handler for chat messages.
+    - Ensures session['patient_state'] persists across turns with default keys
+    - Runs Pre-intent ClinicalTriageEngine evaluation
+    - Intercepts greetings with context-aware check-in
+    - Handles medical queries and safety guardrails
+    """
+    if not msg or not msg.strip():
         return "Please enter a message."
+    msg = msg.strip()
+
+    if user is None:
+        user = current_user if current_user and current_user.is_authenticated else None
+
+    # Ensure session["patient_state"] persists across turns with default keys
+    try:
+        if "patient_state" not in session or not isinstance(session.get("patient_state"), dict):
+            session["patient_state"] = {
+                "has_cancer_history": False,
+                "active_emergency": None,
+                "emergency_turn_count": 0,
+                "current_symptoms": []
+            }
+        else:
+            session["patient_state"].setdefault("has_cancer_history", False)
+            session["patient_state"].setdefault("active_emergency", None)
+            session["patient_state"].setdefault("emergency_turn_count", 0)
+            session["patient_state"].setdefault("current_symptoms", [])
+    except Exception:
+        pass
 
     # 1. Run Input Guardrails (Prompt injection, Content safety, Medical emergency)
     is_blocked, category, guard_msg = app_module.apply_input_guardrails(msg)
     if is_blocked:
-        # If medical emergency, save user message and emergency guidance in chat history
         if category == "medical_emergency":
             try:
                 chat_session = get_active_session()
@@ -148,12 +181,6 @@ def chat():
                 pass
         return guard_msg
 
-    intent = app_module.classify_intent(app_module.classifierModel, msg)
-    print("=" * 50)
-    print("USER:", msg)
-    print("INTENT:", intent)
-    print("=" * 50)
-
     try:
         chat_session = get_active_session()
 
@@ -161,11 +188,12 @@ def chat():
         db.session.add(user_msg)
         db.session.commit()
 
-        history_text  = build_history_text(chat_session)
-        user_memory   = get_user_memory(current_user)
+        history_text = build_history_text(chat_session)
+        user_memory = get_user_memory(user) if user else "No previous records."
 
-        # Trigger decoupled background memory update asynchronously (Phase A, B, C)
-        enqueue_memory_update(current_user.id, msg, history_text)
+        # Trigger decoupled background memory update asynchronously
+        if user and hasattr(user, "id"):
+            enqueue_memory_update(user.id, msg, history_text)
 
         # Trigger decoupled background title update asynchronously
         if chat_session.title == "New Consultation":
@@ -176,11 +204,103 @@ def chat():
         if msg_count >= 6 and msg_count % 4 == 0:
             enqueue_session_summarize(chat_session.id, msg_count)
 
-        # Load or initialize structured patient state (DB-backed)
-        patient_state = load_patient_state(chat_session)
+        # Load or initialize structured patient state (State Store + DB backed)
+        state_store = get_state_store()
+        patient_state = state_store.get(str(chat_session.id)) or load_patient_state(chat_session)
+
+        # Apply TTL auto-expiration and check affirmative resolution
+        if check_and_apply_ttl(patient_state):
+            AuditLogger.log_ttl_expired(session_id=str(chat_session.id))
+        if check_emergency_resolution(msg, patient_state):
+            AuditLogger.log_emergency_resolved(session_id=str(chat_session.id))
+
+        # Sync with session["patient_state"]
+        try:
+            sess_ps = session.get("patient_state", {})
+            if sess_ps:
+                if sess_ps.get("has_cancer_history"):
+                    patient_state.has_cancer_history = True
+                if sess_ps.get("active_emergency"):
+                    patient_state.active_emergency = sess_ps.get("active_emergency")
+                if sess_ps.get("emergency_turn_count", 0) > patient_state.emergency_turn_count:
+                    patient_state.emergency_turn_count = sess_ps["emergency_turn_count"]
+                if sess_ps.get("current_symptoms"):
+                    for sym in sess_ps["current_symptoms"]:
+                        if sym not in patient_state.current_symptoms:
+                            patient_state.current_symptoms.append(sym)
+        except Exception:
+            pass
+
         prev_snapshot = patient_state.get_diff_snapshot()
         patient_state = extract_patient_state(msg, patient_state, llm=app_module.classifierModel)
         has_new_structured_fact = patient_state.has_state_diff(prev_snapshot)
+
+        # PRE-INTENT EVALUATION: ClinicalTriageEngine
+        triage_eval = ClinicalTriageEngine.evaluate(msg, patient_state)
+        try:
+            session["patient_state"] = patient_state.to_dict()
+        except Exception:
+            pass
+
+        if triage_eval and triage_eval.get("requires_escalation"):
+            patient_state.emergency_override_served = True
+            patient_state.risk_tier = "Emergency"
+            em_type = triage_eval.get("emergency_type", "FEBRILE_NEUTROPENIA")
+            patient_state.active_emergency = em_type
+            raw_answer = triage_eval["message"]
+            answer = app_module.apply_output_guardrails(
+                raw_answer,
+                is_medical=True,
+                show_disclaimer=False,
+                patient_state=patient_state,
+                triage_tier="Emergency"
+            )
+            answer, guardrail_triggered = ClinicalOutputGuardrail.sanitize_response(answer, patient_state)
+            if guardrail_triggered:
+                AuditLogger.log_guardrail_override(
+                    session_id=str(chat_session.id),
+                    condition="EMERGENCY_OUTPUT_GUARDRAIL",
+                    rule_triggered=answer.trigger_reason or "GUARDRAIL_INTERCEPTION",
+                    raw_tokens_intercepted=answer.intercepted_tokens
+                )
+
+            # Audit logging for emergency / caregiver
+            if em_type == "FEBRILE_NEUTROPENIA_CAREGIVER":
+                AuditLogger.log_caregiver_intercept(
+                    session_id=str(chat_session.id),
+                    condition="FEBRILE_NEUTROPENIA_CAREGIVER",
+                    rule_triggered="CAREGIVER_TRIAGE_INTERCEPT"
+                )
+            else:
+                AuditLogger.log_emergency_triggered(
+                    session_id=str(chat_session.id),
+                    condition=em_type,
+                    rule_triggered="CLINICAL_TRIAGE_ESCALATION"
+                )
+
+            bot_msg = Message(session_id=chat_session.id, role="assistant", content=str(answer))
+            db.session.add(bot_msg)
+            save_patient_state(chat_session, patient_state)
+            state_store.set(str(chat_session.id), patient_state)
+            chat_session.updated_at = datetime.now(timezone.utc)
+            db.session.commit()
+            try:
+                enqueue_eval_safety_check(
+                    message_id=bot_msg.id,
+                    query=msg,
+                    response=str(answer),
+                    patient_state=patient_state.to_dict()
+                )
+            except Exception:
+                pass
+            return str(answer)
+
+        # Generic Intent Classification (only if no pre-intent emergency triggered)
+        intent = app_module.classify_intent(app_module.classifierModel, msg)
+        print("=" * 50)
+        print("USER:", msg)
+        print("INTENT:", intent)
+        print("=" * 50)
 
         # Check for mid-conversation high-risk disclosure correction
         correction_alert = check_mid_conversation_correction(patient_state, history_text)
@@ -194,6 +314,10 @@ def chat():
         )
         patient_state.risk_tier = risk_tier
         patient_state.red_flags = red_flags
+        try:
+            session["patient_state"] = patient_state.to_dict()
+        except Exception:
+            pass
 
         retrieved_chunks = []
 
@@ -214,6 +338,7 @@ def chat():
             bot_msg = Message(session_id=chat_session.id, role="assistant", content=answer)
             db.session.add(bot_msg)
             save_patient_state(chat_session, patient_state)
+            state_store.set(str(chat_session.id), patient_state)
             chat_session.updated_at = datetime.now(timezone.utc)
             db.session.commit()
             return answer
@@ -309,14 +434,9 @@ def chat():
             patient_state.disclaimer_shown = True
 
         elif intent == "greeting":
-            first_name = current_user.name.split()[0] if current_user and current_user.name else "there"
-            greeting_prompt = (
-                f"You are MediAssist, an empathetic medical AI assistant. "
-                f"The user ({first_name}) said: '{msg}'. "
-                f"Reply warmly in 1-2 friendly sentences and ask how you can assist with their health, symptoms, or medical questions today."
-            )
-            raw_resp = app_module.chatModel.invoke(greeting_prompt)
-            raw_answer = raw_resp.content if hasattr(raw_resp, "content") else str(raw_resp)
+            first_name = user.name.split()[0] if user and hasattr(user, "name") and user.name else "there"
+            # Context-Aware Greeting Interception
+            raw_answer = format_context_aware_greeting(patient_state, first_name=first_name, msg=msg)
             answer = app_module.apply_output_guardrails(raw_answer, is_medical=False, show_disclaimer=False)
 
         elif intent == "memory_recall":
@@ -337,11 +457,26 @@ def chat():
             # Non-medical query: enforce strict medical specialization
             answer = app_module.NON_MEDICAL_REFUSAL
 
-        bot_msg = Message(session_id=chat_session.id, role="assistant", content=answer)
+        # Post-generation deterministic guardrail on all outgoing answers
+        answer, guardrail_triggered = ClinicalOutputGuardrail.sanitize_response(answer, patient_state)
+        if guardrail_triggered:
+            AuditLogger.log_guardrail_override(
+                session_id=str(chat_session.id),
+                condition="POST_LLM_OUTPUT_GUARDRAIL",
+                rule_triggered=answer.trigger_reason or "GUARDRAIL_INTERCEPTION",
+                raw_tokens_intercepted=answer.intercepted_tokens
+            )
+
+        bot_msg = Message(session_id=chat_session.id, role="assistant", content=str(answer))
         db.session.add(bot_msg)
 
-        # Persist patient state to DB (shared between text & voice paths)
+        # Persist patient state to DB & distributed state store
         save_patient_state(chat_session, patient_state)
+        state_store.set(str(chat_session.id), patient_state)
+        try:
+            session["patient_state"] = patient_state.to_dict()
+        except Exception:
+            pass
         chat_session.updated_at = datetime.now(timezone.utc)
         db.session.commit()
 
@@ -375,6 +510,16 @@ def chat():
     except Exception:
         traceback.print_exc()
         return "Something went wrong."
+
+
+handle_chat_message = handle_chat_turn
+
+
+@chat_bp.route("/get", methods=["POST"], endpoint="chat")
+@login_required
+def chat():
+    msg = request.form.get("msg", "").strip()
+    return handle_chat_turn(msg, current_user)
 
 
 @chat_bp.route("/delete_session/<int:session_id>", methods=["POST"], endpoint="delete_session")

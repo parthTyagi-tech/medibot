@@ -247,6 +247,9 @@ def generate_voice_response(msg: str, user=None) -> str:
     """Generates a non-streaming voice response with full clinical triage parity."""
     import app
     from research.src.clinical_triage import (
+        PatientState,
+        ClinicalTriageEngine,
+        format_context_aware_greeting,
         extract_patient_state,
         evaluate_triage_tier,
         check_medication_contraindications,
@@ -270,10 +273,6 @@ def generate_voice_response(msg: str, user=None) -> str:
                     pass
             return guard_msg
 
-        logger.info(f"[generate_voice_response] Step 1: Classifying intent...")
-        intent = app.classify_intent(app.classifierModel, msg)
-        logger.info(f"[generate_voice_response] Step 1: Intent = '{intent}'")
-
         chat_session = None
         if user:
             chat_session = get_active_session_for_user(user.id)
@@ -284,11 +283,72 @@ def generate_voice_response(msg: str, user=None) -> str:
         history_text = build_history_text(chat_session) if chat_session else ""
         user_memory = get_user_memory(user) if user else "Voice Session"
 
-        # Load persisted patient state from DB (parity with text path)
-        patient_state = load_patient_state(chat_session)
+        # Load persisted patient state from State Store or DB (parity with text path)
+        from services.state_store import get_state_store, check_and_apply_ttl, check_emergency_resolution
+        from services.output_guardrails import ClinicalOutputGuardrail
+        from services.audit_logger import AuditLogger
+
+        state_store = get_state_store()
+        patient_state = (state_store.get(str(chat_session.id)) if chat_session else None) or load_patient_state(chat_session)
+        if check_and_apply_ttl(patient_state) and chat_session:
+            AuditLogger.log_ttl_expired(session_id=str(chat_session.id))
+        if check_emergency_resolution(msg, patient_state) and chat_session:
+            AuditLogger.log_emergency_resolved(session_id=str(chat_session.id))
+
         prev_snapshot = patient_state.get_diff_snapshot()
         patient_state = extract_patient_state(msg, patient_state)
         has_new_structured_fact = patient_state.has_state_diff(prev_snapshot)
+
+        # PRE-INTENT EVALUATION: ClinicalTriageEngine
+        triage_eval = ClinicalTriageEngine.evaluate(msg, patient_state)
+        if triage_eval and triage_eval.get("requires_escalation"):
+            patient_state.emergency_override_served = True
+            patient_state.risk_tier = "Emergency"
+            em_type = triage_eval.get("emergency_type", "FEBRILE_NEUTROPENIA")
+            patient_state.active_emergency = em_type
+            raw_answer = triage_eval["message"]
+            answer = app.apply_output_guardrails(
+                raw_answer,
+                is_medical=True,
+                show_disclaimer=False,
+                patient_state=patient_state,
+                triage_tier="Emergency"
+            )
+            answer, guardrail_triggered = ClinicalOutputGuardrail.sanitize_response(answer, patient_state)
+            if chat_session:
+                if guardrail_triggered:
+                    AuditLogger.log_guardrail_override(
+                        session_id=str(chat_session.id),
+                        condition="EMERGENCY_OUTPUT_GUARDRAIL",
+                        rule_triggered=answer.trigger_reason or "GUARDRAIL_INTERCEPTION",
+                        raw_tokens_intercepted=answer.intercepted_tokens
+                    )
+                if em_type == "FEBRILE_NEUTROPENIA_CAREGIVER":
+                    AuditLogger.log_caregiver_intercept(
+                        session_id=str(chat_session.id),
+                        condition="FEBRILE_NEUTROPENIA_CAREGIVER",
+                        rule_triggered="CAREGIVER_TRIAGE_INTERCEPT"
+                    )
+                else:
+                    AuditLogger.log_emergency_triggered(
+                        session_id=str(chat_session.id),
+                        condition=em_type,
+                        rule_triggered="CLINICAL_TRIAGE_ESCALATION"
+                    )
+
+            save_patient_state(chat_session, patient_state)
+            if chat_session:
+                state_store.set(str(chat_session.id), patient_state)
+            if chat_session and answer:
+                bot_msg = Message(session_id=chat_session.id, role="assistant", content=str(answer))
+                db.session.add(bot_msg)
+                chat_session.updated_at = datetime.now(timezone.utc)
+                db.session.commit()
+            return str(answer)
+
+        logger.info(f"[generate_voice_response] Step 1: Classifying intent...")
+        intent = app.classify_intent(app.classifierModel, msg)
+        logger.info(f"[generate_voice_response] Step 1: Intent = '{intent}'")
 
         # Clinical triage: red-flag overrides & risk tier
         correction_alert = check_mid_conversation_correction(patient_state, history_text)
@@ -351,14 +411,8 @@ def generate_voice_response(msg: str, user=None) -> str:
             patient_state.disclaimer_shown = True
             logger.info(f"[generate_voice_response] Step 2: chatModel returned ({len(answer)} chars)")
         elif intent == "greeting":
-            first_name = user.name.split()[0] if user and user.name else "there"
-            greeting_prompt = (
-                f"You are MediAssist, an empathetic medical AI assistant. "
-                f"The user ({first_name}) said: '{msg}'. "
-                f"Reply warmly in 1-2 friendly sentences and ask how you can assist with their health, symptoms, or medical questions today."
-            )
-            raw_resp = app.chatModel.invoke(greeting_prompt)
-            raw_answer = raw_resp.content if hasattr(raw_resp, "content") else str(raw_resp)
+            first_name = user.name.split()[0] if user and hasattr(user, "name") and user.name else "there"
+            raw_answer = format_context_aware_greeting(patient_state, first_name=first_name, msg=msg)
             answer = app.apply_output_guardrails(raw_answer, is_medical=False)
         elif intent == "memory_recall":
             recall_prompt = (
@@ -376,11 +430,23 @@ def generate_voice_response(msg: str, user=None) -> str:
             # Non-medical queries: decline politely
             answer = app.NON_MEDICAL_REFUSAL
 
-        # Save patient state to DB
+        # Post-generation deterministic guardrail
+        answer, guardrail_triggered = ClinicalOutputGuardrail.sanitize_response(answer, patient_state)
+        if guardrail_triggered and chat_session:
+            AuditLogger.log_guardrail_override(
+                session_id=str(chat_session.id),
+                condition="VOICE_OUTPUT_GUARDRAIL",
+                rule_triggered=answer.trigger_reason or "GUARDRAIL_INTERCEPTION",
+                raw_tokens_intercepted=answer.intercepted_tokens
+            )
+
+        # Save patient state to DB and distributed state store
         save_patient_state(chat_session, patient_state)
+        if chat_session:
+            state_store.set(str(chat_session.id), patient_state)
 
         if chat_session and answer:
-            bot_msg = Message(session_id=chat_session.id, role="assistant", content=answer)
+            bot_msg = Message(session_id=chat_session.id, role="assistant", content=str(answer))
             db.session.add(bot_msg)
             chat_session.updated_at = datetime.now(timezone.utc)
             db.session.commit()

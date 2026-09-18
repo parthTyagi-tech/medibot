@@ -5,6 +5,9 @@ __pycache__/
 instance/
 *.tmp
 error.log
+logs/
+*.log
+evals/results/
 static/audio/
 .fastembed_cache/
 .vscode/

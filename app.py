@@ -28,7 +28,8 @@ from services.ai_service import (
     apply_input_guardrails,
     apply_output_guardrails,
     NON_MEDICAL_REFUSAL,
-    build_prompt
+    build_prompt,
+    build_system_prompt
 )
 from routes import register_routes
 

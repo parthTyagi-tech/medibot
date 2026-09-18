@@ -1,0 +1,242 @@
+"""
+MediAssist Distributed Patient State Store & Lifecycle Management
+==================================================================
+Abstract state store interface with InMemory and Redis backends.
+Enforces:
+1. Session isolation across multi-worker/serverless environments
+2. State Time-To-Live (TTL) auto-expiration (12-hour default for acute emergencies)
+3. Affirmative resolution tracking (emergency stand-down)
+"""
+
+import os
+import time
+import json
+import logging
+import re
+from abc import ABC, abstractmethod
+from typing import Optional, Dict, Any, Union
+
+from research.src.clinical_triage import PatientState
+
+logger = logging.getLogger(__name__)
+
+DEFAULT_EMERGENCY_TTL_SECONDS = 12 * 3600  # 12 hours
+
+RESOLVE_PATTERNS = [
+    r"back from (the )?(hospital|er|emergency room|clinic|doctor)",
+    r"doctor (cleared|checked|saw|discharged|treated) me",
+    r"oncologist (cleared|treated|saw|discharged) me",
+    r"received (iv )?antibiotics",
+    r"fever is (gone|resolved|down|normal)",
+    r"i('m| am) fine now",
+    r"feeling much better now",
+    r"temperature is back to normal"
+]
+
+
+def check_and_apply_ttl(state: PatientState, ttl_seconds: int = DEFAULT_EMERGENCY_TTL_SECONDS) -> bool:
+    """
+    Checks if active emergency has exceeded the TTL threshold.
+    If expired, resets active_emergency and marks resolved_emergency='EXPIRED_TTL'.
+    Returns True if an expiration occurred, False otherwise.
+    """
+    if not state.active_emergency:
+        return False
+
+    now = time.time()
+    if state.emergency_timestamp and (now - state.emergency_timestamp > ttl_seconds):
+        logger.info(
+            f"[StateStore] Emergency {state.active_emergency} exceeded TTL of {ttl_seconds}s. "
+            f"Elapsed: {now - state.emergency_timestamp:.1f}s. Resetting emergency state."
+        )
+        state.resolved_emergency = "EXPIRED_TTL"
+        state.active_emergency = None
+        state.emergency_turn_count = 0
+        state.active_emergency_topic = None
+        state.emergency_override_served = False
+        # Remove fever from current symptoms if it expired
+        if "fever" in state.current_symptoms:
+            state.current_symptoms.remove("fever")
+        return True
+
+    return False
+
+
+def check_emergency_resolution(user_text: str, state: PatientState) -> bool:
+    """
+    Detects affirmative resolution disclosures from the user (e.g., 'back from hospital',
+    'doctor cleared me'). If detected, transitions active_emergency to resolved_emergency.
+    Returns True if resolution occurred, False otherwise.
+    """
+    if not state.active_emergency:
+        return False
+
+    text = (user_text or "").lower()
+    for pat in RESOLVE_PATTERNS:
+        if re.search(pat, text):
+            logger.info(f"[StateStore] Affirmative emergency resolution detected via pattern: '{pat}'")
+            state.resolved_emergency = state.active_emergency
+            state.active_emergency = None
+            state.emergency_turn_count = 0
+            state.emergency_override_served = False
+            state.active_emergency_topic = None
+            if "fever" in state.current_symptoms:
+                state.current_symptoms.remove("fever")
+            return True
+
+    return False
+
+
+class BaseStateStore(ABC):
+    """Abstract interface for session patient state storage."""
+
+    @abstractmethod
+    def get(self, session_id: str) -> Optional[PatientState]:
+        pass
+
+    @abstractmethod
+    def set(self, session_id: str, state: PatientState, ttl_seconds: Optional[int] = None) -> None:
+        pass
+
+    @abstractmethod
+    def delete(self, session_id: str) -> None:
+        pass
+
+
+import threading
+
+
+class InMemoryStateStore(BaseStateStore):
+    """
+    Thread-safe in-memory state store with TTL tracking per session.
+    Suitable for multi-worker threads, local testing, and development.
+    """
+
+    def __init__(self):
+        self._store: Dict[str, Dict[str, Any]] = {}
+        self._lock = threading.Lock()
+
+    def get(self, session_id: str) -> Optional[PatientState]:
+        with self._lock:
+            entry = self._store.get(session_id)
+            if not entry:
+                return None
+
+            # Check session TTL if set
+            expires_at = entry.get("expires_at")
+            if expires_at and time.time() > expires_at:
+                del self._store[session_id]
+                return None
+
+            state = entry.get("state")
+            if state:
+                # Check internal emergency TTL
+                check_and_apply_ttl(state)
+            return state
+
+    def set(self, session_id: str, state: PatientState, ttl_seconds: Optional[int] = None) -> None:
+        expires_at = (time.time() + ttl_seconds) if ttl_seconds else None
+        with self._lock:
+            self._store[session_id] = {
+                "state": state,
+                "expires_at": expires_at
+            }
+
+    def delete(self, session_id: str) -> None:
+        with self._lock:
+            self._store.pop(session_id, None)
+
+    def clear(self) -> None:
+        with self._lock:
+            self._store.clear()
+
+
+class RedisStateStore(BaseStateStore):
+    """
+    Distributed Redis state store with JSON serialization and key expiration.
+    Gracefully falls back to InMemoryStateStore if Redis is unavailable.
+    """
+
+    def __init__(self, redis_url: str = "redis://localhost:6379/0", key_prefix: str = "medibot:session:"):
+        self.key_prefix = key_prefix
+        self.fallback = InMemoryStateStore()
+        self._client = None
+
+        try:
+            import redis
+            self._client = redis.Redis.from_url(redis_url, decode_responses=True)
+            self._client.ping()
+            logger.info(f"[RedisStateStore] Successfully connected to Redis at {redis_url}")
+        except Exception as e:
+            logger.warning(f"[RedisStateStore] Redis unavailable ({e}). Falling back to InMemoryStateStore.")
+            self._client = None
+
+    def _get_key(self, session_id: str) -> str:
+        return f"{self.key_prefix}{session_id}"
+
+    def get(self, session_id: str) -> Optional[PatientState]:
+        if not self._client:
+            return self.fallback.get(session_id)
+
+        try:
+            raw_data = self._client.get(self._get_key(session_id))
+            if not raw_data:
+                return None
+            state = PatientState.from_json(raw_data)
+            check_and_apply_ttl(state)
+            return state
+        except Exception as e:
+            logger.error(f"[RedisStateStore] Error retrieving session {session_id}: {e}")
+            return self.fallback.get(session_id)
+
+    def set(self, session_id: str, state: PatientState, ttl_seconds: Optional[int] = None) -> None:
+        if not self._client:
+            self.fallback.set(session_id, state, ttl_seconds)
+            return
+
+        try:
+            key = self._get_key(session_id)
+            json_str = state.to_json()
+            if ttl_seconds:
+                self._client.setex(key, ttl_seconds, json_str)
+            else:
+                self._client.set(key, json_str)
+        except Exception as e:
+            logger.error(f"[RedisStateStore] Error storing session {session_id}: {e}")
+            self.fallback.set(session_id, state, ttl_seconds)
+
+    def delete(self, session_id: str) -> None:
+        if not self._client:
+            self.fallback.delete(session_id)
+            return
+
+        try:
+            self._client.delete(self._get_key(session_id))
+        except Exception as e:
+            logger.error(f"[RedisStateStore] Error deleting session {session_id}: {e}")
+            self.fallback.delete(session_id)
+
+
+# Global singleton instance
+_GLOBAL_STATE_STORE: Optional[BaseStateStore] = None
+
+
+def get_state_store() -> BaseStateStore:
+    """
+    Returns global configured state store singleton.
+    Reads REDIS_URL environment variable if set.
+    """
+    global _GLOBAL_STATE_STORE
+    if _GLOBAL_STATE_STORE is None:
+        redis_url = os.getenv("REDIS_URL")
+        if redis_url:
+            _GLOBAL_STATE_STORE = RedisStateStore(redis_url=redis_url)
+        else:
+            _GLOBAL_STATE_STORE = InMemoryStateStore()
+    return _GLOBAL_STATE_STORE
+
+
+def reset_state_store() -> None:
+    """Resets global state store (primarily for unit tests)."""
+    global _GLOBAL_STATE_STORE
+    _GLOBAL_STATE_STORE = None

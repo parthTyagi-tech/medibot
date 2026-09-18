@@ -104,7 +104,7 @@ EMERGENCY_PATTERNS = [
 COMPILED_EMERGENCY_PATTERNS = [re.compile(p, re.IGNORECASE) for p in EMERGENCY_PATTERNS]
 
 EMERGENCY_RESPONSE = (
-    "🚨 **CRITICAL MEDICAL ALERT: IMMEDIATE ACTION REQUIRED** 🚨\n\n"
+    "**URGENT MEDICAL ALERT: IMMEDIATE ACTION REQUIRED**\n\n"
     "Based on the symptoms you described, this may be a **life-threatening medical emergency**.\n\n"
     "**Please take the following steps IMMEDIATELY:**\n"
     "1. **Call Emergency Services right now**: Dial **911** (US/Canada), **112** (Europe/India), or **999** (UK), or your local emergency number.\n"
@@ -436,7 +436,7 @@ def requires_fixed_emergency_response(patient_state: Optional[Any], triage_tier:
     """
     if triage_tier.upper() == "EMERGENCY" and any(validator_flags.values()):
         return (
-            "🚨 **CRITICAL MEDICAL EMERGENCY: IMMEDIATE CLINICAL EVALUATION REQUIRED**\n\n"
+            "**CRITICAL MEDICAL EMERGENCY: IMMEDIATE CLINICAL EVALUATION REQUIRED**\n\n"
             "Based on the combination of symptoms and health factors you have reported, this situation requires "
             "**immediate in-person medical evaluation** at the nearest Emergency Department or via an emergency oncology/medical hotline.\n\n"
             "**SAFETY DIRECTIVES:**\n"
