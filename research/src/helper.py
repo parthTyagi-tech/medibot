@@ -6,51 +6,8 @@ import os
 import requests
 import time
 import logging
-import hashlib
-import math
 
 logger = logging.getLogger("embeddings")
-
-# ─────────────────────────────────────────────────────────────
-# Fallback: deterministic pseudo-random vectors (zero-download)
-# ─────────────────────────────────────────────────────────────
-
-class LocalEmbeddings:
-    """
-    Zero-download, zero-RAM embedding generator.
-    Produces deterministic 384-dimensional normalized vectors instantly (0.001ms),
-    completely eliminating HuggingFace downloads, PyTorch dependencies, and Render OOM/timeout errors.
-    Used ONLY as a fallback when the Hugging Face API is unavailable.
-    """
-
-    def __init__(self):
-        self._cache = {}
-
-    def embed_query(self, text: str) -> List[float]:
-        if not text:
-            return [0.0] * 384
-
-        if text in self._cache:
-            return self._cache[text]
-
-        vec = []
-        for i in range(384):
-            h = hashlib.sha256(f"{text}_{i}".encode("utf-8")).digest()
-            val = (int.from_bytes(h[:4], "big") / 0xFFFFFFFF) * 2.0 - 1.0
-            vec.append(val)
-
-        norm = math.sqrt(sum(x * x for x in vec)) or 1.0
-        normalized_vec = [float(x / norm) for x in vec]
-        if len(self._cache) >= 128:
-            self._cache.clear()
-        self._cache[text] = normalized_vec
-        return normalized_vec
-
-    def embed_documents(self, texts: List[str]) -> List[List[float]]:
-        if not texts:
-            return []
-        return [self.embed_query(t) for t in texts]
-
 
 # ─────────────────────────────────────────────────────────────
 # Primary: Real semantic embeddings via Hugging Face Inference API
@@ -70,10 +27,10 @@ class HuggingFaceAPIEmbeddings:
     for sentence-transformers/all-MiniLM-L6-v2 (384-dim, cosine similarity).
 
     Features:
-    - Zero local RAM: model runs entirely on HF's cloud GPUs.
+    - Zero local RAM: model runs entirely on HF's cloud GPUs (<50MB host RAM).
     - LRU cache (128 items) for instant deduplication.
     - Exponential backoff retry (3 attempts) for network resilience.
-    - Graceful fallback to LocalEmbeddings if HF API is unreachable.
+    - Deterministic output dimensions matching Pinecone index configuration.
     """
 
     def __init__(self, token: str):
@@ -84,7 +41,6 @@ class HuggingFaceAPIEmbeddings:
             "Content-Type": "application/json",
         }
         self._cache = {}
-        self._fallback = LocalEmbeddings()
 
     def _call_api(self, texts: List[str]) -> List[List[float]]:
         """Call HF Inference API with exponential backoff retry."""
@@ -127,7 +83,7 @@ class HuggingFaceAPIEmbeddings:
         return []
 
     def embed_query(self, text: str) -> List[float]:
-        """Embed a single text query into a 384-dim vector."""
+        """Embed a single text query into a 384-dim semantic vector."""
         if not text:
             return [0.0] * _DIMENSIONS
 
@@ -138,8 +94,8 @@ class HuggingFaceAPIEmbeddings:
         if result:
             vec = result[0]
         else:
-            logger.warning("[HF-Embed] Falling back to LocalEmbeddings for query.")
-            vec = self._fallback.embed_query(text)
+            logger.error("[HF-Embed] Failed to generate semantic vector for query.")
+            vec = [0.0] * _DIMENSIONS
 
         # LRU eviction
         if len(self._cache) >= 128:
@@ -172,28 +128,31 @@ class HuggingFaceAPIEmbeddings:
                         self._cache.clear()
                     self._cache[texts[idx]] = vec
             else:
-                # Fallback for failed batch
-                logger.warning("[HF-Embed] Falling back to LocalEmbeddings for batch.")
+                logger.error("[HF-Embed] Failed to retrieve semantic embeddings for batch.")
                 for idx in uncached_indices:
-                    vec = self._fallback.embed_query(texts[idx])
-                    results[idx] = vec
+                    results[idx] = [0.0] * _DIMENSIONS
 
         return results
 
 
+# Backward compatibility alias
+LocalEmbeddings = HuggingFaceAPIEmbeddings
+
+
 def download_embeddings():
     """
-    Returns the best available embedding model:
-    - HuggingFaceAPIEmbeddings (real semantic vectors) when HF_TOKEN is set.
-    - LocalEmbeddings (deterministic fallback) otherwise.
+    Returns HuggingFaceAPIEmbeddings for true semantic embeddings
+    via Hugging Face's Serverless Inference API (all-MiniLM-L6-v2).
+    Requires HF_TOKEN to be set in environment variables.
     """
     hf_token = os.getenv("HF_TOKEN")
-    if hf_token:
-        logger.info("[Embeddings] Using HuggingFace API (all-MiniLM-L6-v2) for semantic embeddings.")
-        return HuggingFaceAPIEmbeddings(token=hf_token)
-    else:
-        logger.warning("[Embeddings] HF_TOKEN not set — falling back to LocalEmbeddings (non-semantic).")
-        return LocalEmbeddings()
+    if not hf_token:
+        raise ValueError(
+            "HF_TOKEN environment variable is missing. "
+            "Please provide a valid Hugging Face Access Token in .env to generate semantic embeddings."
+        )
+    logger.info("[Embeddings] Using Hugging Face Serverless API (all-MiniLM-L6-v2) for semantic embeddings.")
+    return HuggingFaceAPIEmbeddings(token=hf_token)
 
 
 
