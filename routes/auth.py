@@ -38,15 +38,18 @@ def login():
         return redirect(url_for("chat.index"))
 
     if request.method == "POST":
-        email    = request.form["email"]
-        password = request.form["password"]
-        user     = User.query.filter_by(email=email).first()
-
-        if user and user.password_hash and check_password_hash(user.password_hash, password):
-            login_user(user)
-            return redirect(url_for("chat.index"))
-
-        return render_template("login.html", error="Invalid email or password")
+        email    = request.form.get("email", "").strip().lower()
+        password = request.form.get("password", "")
+        try:
+            user = User.query.filter_by(email=email).first()
+            if user and user.password_hash and check_password_hash(user.password_hash, password):
+                login_user(user)
+                return redirect(url_for("chat.index"))
+            return render_template("login.html", error="Invalid email or password")
+        except Exception as e:
+            logger.error(f"Login database error: {e}")
+            db.session.rollback()
+            return render_template("login.html", error="Temporary database connection error. Please try again in a few seconds."), 500
 
     success = None
     if request.args.get("reset") == "success":
