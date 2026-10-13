@@ -1,0 +1,13 @@
+{
+  "model_id": "openai/gpt-oss-120b",
+  "samples_measured": 22,
+  "p50_latency_ms": 875.5,
+  "p95_latency_ms": 1287.86,
+  "max_latency_ms": 1518.29,
+  "avg_prompt_tokens": 1708.2,
+  "avg_completion_tokens": 110.6,
+  "avg_total_tokens": 1818.8,
+  "daily_capacity_under_200k_tpd": 109,
+  "truncated_responses": 0,
+  "empty_responses": 0
+}

@@ -16,6 +16,10 @@ from langchain.chains.combine_documents import create_stuff_documents_chain
 from research.src.guardrails import apply_output_guardrails, UNIVERSALLY_PROHIBITED_DRUGS
 
 
+@unittest.skipUnless(
+    os.getenv("RUN_LIVE_LLM_TESTS") == "1",
+    "Live LLM test skipped; set RUN_LIVE_LLM_TESTS=1 to run."
+)
 class TestLiveReproductionRegression(unittest.TestCase):
     """
     Directly asserts expected behaviors on the user's reproduction case:

@@ -29,7 +29,18 @@ from research.src.guardrails import (
 )
 
 
+import os
+from unittest.mock import patch
+
+
 class TestAdversarialClinicalTriage(unittest.TestCase):
+
+    def setUp(self):
+        self.env_patcher = patch.dict(os.environ, {"INTENT_CLASSIFIER_MODE": "regex"})
+        self.env_patcher.start()
+
+    def tearDown(self):
+        self.env_patcher.stop()
 
     def test_auditable_triage_matrix_structure(self):
         """Verify the auditable triage table is versioned and contains all core risk tiers."""

@@ -1,4 +1,7 @@
+import os
 import unittest
+from unittest.mock import patch
+
 from research.src.guardrails import (
     apply_input_guardrails,
     is_code_or_programming_request,
@@ -12,6 +15,13 @@ class TestCodeRefusalConsistency(unittest.TestCase):
     Tests Bug 1: Uniform, canonical detection and refusal of code and script generation requests,
     even when medical keywords ("medication", "prescription") are present, and under adversarial phrasing.
     """
+
+    def setUp(self):
+        self.env_patcher = patch.dict(os.environ, {"INTENT_CLASSIFIER_MODE": "regex"})
+        self.env_patcher.start()
+
+    def tearDown(self):
+        self.env_patcher.stop()
 
     def test_code_requests_with_medical_keywords_are_refused(self):
         code_queries = [

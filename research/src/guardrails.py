@@ -42,6 +42,41 @@ PROMPT_INJECTION_PATTERNS = [
     r"<\s*/?\s*(system_prompt|user_query|context|memory|instruction|prompt)\s*>",
     r"\[\s*system\s*\]",
     r"```\s*system",
+
+    # ─────────────────────────────────────────────────────────────
+    # Multilingual Prompt Injection & Jailbreak Defenses
+    # NOTE: [NATIVE-SPEAKER-REVIEW-NEEDED] The following patterns cover es, fr, de, it, nl, ja
+    # and require validation by native-speaker localization / safety teams.
+    # ─────────────────────────────────────────────────────────────
+    # Spanish (es)
+    r"ignora\s+(todas\s+las\s+)?(instrucciones|reglas|indicaciones)\s*(anteriores|previas)?",
+    r"olvida\s+(todas\s+las\s+)?(instrucciones|reglas)",
+    r"\bmodo\s+dan\b",
+    r"(revela|muestra|imprime)\s+(tu\s+)?(prompt\s+de\s+sistema|sistema\s+prompt|instrucciones\s+ocultas)",
+    # French (fr)
+    r"ignore\s+(toutes\s+les\s+)?(instructions|directives|r[èe]gles)\s*(pr[ée]c[ée]dentes|ant[ée]rieures)?",
+    r"oublie\s+(toutes\s+les\s+)?instructions",
+    r"\bmode\s+dan\b",
+    r"(affiche|r[ée]v[èe]le|montre)\s+(ton\s+)?(prompt\s+syst[èe]me|instructions\s+cach[ée]es)",
+    # German (de)
+    r"ignoriere\s+(alle\s+)?(vorherigen\s+|bisherigen\s+)?(anweisungen|regeln|instruktionen)",
+    r"vergiss\s+(alle\s+)?(anweisungen|regeln)",
+    r"\bdan[\s-]modus\b",
+    r"(zeige|gib\s+aus)\s+(deinen\s+)?(system[\s-]?prompt|geheime\s+anweisungen)",
+    # Italian (it)
+    r"ignora\s+(tutte\s+le\s+)?(istruzioni|regole)\s*(precedenti)?",
+    r"dimentica\s+(tutte\s+le\s+)?istruzioni",
+    r"\bmodalit[àa]\s+dan\b",
+    r"(mostra|rivela)\s+(il\s+tuo\s+)?(prompt\s+di\s+sistema|istruzioni\s+segrete)",
+    # Dutch (nl)
+    r"negeer\s+(alle\s+)?(eerdere\s+)?(instructies|regels)",
+    r"vergeet\s+(alle\s+)?instructies",
+    r"\bdan[\s-]modus\b",
+    r"(toon|laat\s+zien)\s+(je\s+)?(systeemprompt|verborgen\s+instructies)",
+    # Japanese (ja)
+    r"(これまでの|すべての)?(指示|ルール|プロンプト)を(無視|忘れて)",
+    r"danモード",
+    r"(システムプロンプト|内部指示)を(表示|出力|教えて)",
 ]
 
 COMPILED_INJECTION_PATTERNS = [re.compile(p, re.IGNORECASE) for p in PROMPT_INJECTION_PATTERNS]
@@ -76,7 +111,7 @@ def is_prompt_injection(text: str) -> bool:
 EMERGENCY_PATTERNS = [
     # Heart / Cardiac
     r"\b(crushing\s+(chest\s+pain|chest\s+pressure)|chest\s+pressure\s+radiating|heart\s+attack)\b",
-    r"\b(chest\s+pain\s+(and|with|\+)\s+(shortness\s+of\s+breath|left\s+arm|sweating|nausea))\b",
+    r"\b(chest\s+pain|chest\s+pressure)\b.*?\b(radiating|left\s+arm|left\s+shoulder|shortness\s+of\s+breath|sweating|nausea)\b",
     
     # Stroke FAST signs (Face drooping, Arm weakness, Slurred speech, Time)
     r"\bface\s+(is\s+|feels\s+)?(droop|drooping|numb)\b",
@@ -99,6 +134,53 @@ EMERGENCY_PATTERNS = [
     
     # Self-harm / Suicide Crisis
     r"\b(want\s+to\s+(kill\s+myself|end\s+my\s+life|commit\s+suicide)|suicidal\s+thoughts)\b",
+
+    # ─────────────────────────────────────────────────────────────
+    # Multilingual Medical Emergency & Acute Crisis Defenses
+    # NOTE: [NATIVE-SPEAKER-REVIEW-NEEDED] The following patterns cover es, fr, de, it, nl, ja
+    # and require validation by native-speaker localization / clinical safety teams.
+    # ─────────────────────────────────────────────────────────────
+    # Spanish (es)
+    r"\b(dolor\s+(punzante\s+|opresivo\s+)?en\s+el\s+pecho|ataque\s+al\s+coraz[oó]n|infarto)\b",
+    r"\b(falta\s+el\s+aire|no\s+puedo\s+respirar|dificultad\s+(grave\s+)?para\s+respirar|asfixi[aá]ndome)\b",
+    r"\b(accidente\s+cerebrovascular|derrame\s+cerebral|cara\s+ca[ií]da)\b",
+    r"\b(sangrado\s+incontrolable|vomitando\s+sangre|tosiendo\s+sangre)\b",
+    r"\b(quiero\s+(morir|suicidarme|quitarme\s+la\s+vida|terminar\s+con\s+mi\s+vida)|pensamientos\s+suicidas)\b",
+
+    # French (fr)
+    r"\b(douleur\s+thoracique(\s+[ée]crasante)?|crise\s+cardiaque|infarctus)\b",
+    r"\b(bras\s+gauche\s+est\s+engourdi|je\s+ne\s+peux\s+pas\s+respirer|difficult[ée]\s+respiratoire|[ée]touffement)\b",
+    r"\b(accident\s+vasculaire\s+c[ée]r[ée]bral|avc|visage\s+affaiss[ée])\b",
+    r"\b(saignement\s+incontr[ôo]lable|vomir\s+du\s+sang|cracher\s+du\s+sang)\b",
+    r"\b(veux\s+mettre\s+fin\s+[àa]\s+mes\s+jours|envie\s+de\s+(mourir|me\s+suicider)|id[ée]es\s+suicides)\b",
+
+    # German (de)
+    r"\b(vernichtende\s+brustschmerzen|brustschmerz|herzinfarkt|schmerzen\s+in\s+der\s+brust)\b",
+    r"\b(kann\s+nicht\s+atmen|keine\s+luft|schwere\s+atemnot|ersticke)\b",
+    r"\b(schlaganfall|gesichtsl[äa]hmung|herabh[äa]ngender\s+mundwinkel)\b",
+    r"\b(unkontrollierbare\s+blutung|blut\s+erbrechen|blut\s+husten)\b",
+    r"\b(suizidgedanken|selbstmord|nicht\s+mehr\s+weiterleben|mein\s+leben\s+beenden|will\s+sterben)\b",
+
+    # Italian (it)
+    r"\b(dolore\s+oppressivo\s+al\s+torace|dolore\s+al\s+petto|attacco\s+di\s+cuore|infarto)\b",
+    r"\b(non\s+riesco\s+a\s+respirare|grave\s+difficolt[àa]\s+respiratoria|sto\s+soffocando)\b",
+    r"\b(ictus|paresi\s+facciale|faccia\s+cadente)\b",
+    r"\b(emorragia\s+incontrollabile|vomitare\s+sangue|sputare\s+sangue)\b",
+    r"\b(voglio\s+(togliermi\s+la\s+vita|morire|suicidarmi|farla\s+finita)|pensieri\s+suicidi)\b",
+
+    # Dutch (nl)
+    r"\b(beklemmende\s+pijn\s+op\s+de\s+borst|pijn\s+op\s+de\s+borst|hartaanval|hartinfarct)\b",
+    r"\b(kan\s+niet\s+ademen|ernstige\s+benauwdheid|stik|geen\s+lucht)\b",
+    r"\b(beroerte|scheve\s+mond|verlamming\s+in\s+gezicht)\b",
+    r"\b(onbeheersbare\s+bloeding|bloed\s+overgeven|bloed\s+spugen)\b",
+    r"\b(wil\s+zelfmoord\s+plegen|een\s+einde\s+aan\s+mijn\s+leven\s+maken|zie\s+het\s+leven\s+niet\s+meer\s+zitten|wil\s+dood)\b",
+
+    # Japanese (ja)
+    r"(胸が締め付けられるような激痛|胸の激しい痛み|心筋梗塞)",
+    r"(息ができない|呼吸困難|窒息しそう)",
+    r"(脳卒中|顔の麻痺|ろれつが回らない)",
+    r"(止まらない大量出血|血を吐いた|吐血)",
+    r"(死にたい|自殺したい|命を絶ちたい|自死)",
 ]
 
 COMPILED_EMERGENCY_PATTERNS = [re.compile(p, re.IGNORECASE) for p in EMERGENCY_PATTERNS]

@@ -10,7 +10,9 @@ from flask import Flask
 from flask_mail import Mail
 from werkzeug.middleware.proxy_fix import ProxyFix
 
-os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"
+# Allow insecure transport only during development (Amendment 6)
+if os.getenv("FLASK_ENV", "").strip().lower() == "development":
+    os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"
 os.environ["OAUTHLIB_RELAX_TOKEN_SCOPE"] = "1"
 
 from research.src.auth import (
@@ -65,18 +67,36 @@ elif db_url.startswith("postgresql://") and not db_url.startswith("postgresql+")
 app.config["SQLALCHEMY_DATABASE_URI"]        = db_url
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
+engine_options = {
+    "pool_pre_ping": True,
+}
+if not db_url.startswith("sqlite"):
+    engine_options["pool_recycle"] = 280
+    engine_options["pool_timeout"] = 20
+
+app.config["SQLALCHEMY_ENGINE_OPTIONS"] = engine_options
+
 # Initialize extensions
 db.init_app(app)
 login_manager.init_app(app)
 login_manager.login_view = "login"
 
 with app.app_context():
-    db.create_all()
     try:
+        db.create_all()
         from scripts.migrate_db import run_migrations
         run_migrations()
     except Exception as e:
         app.logger.warning(f"Database schema auto-migration notice: {e}")
+
+@app.errorhandler(500)
+def handle_internal_server_error(e):
+    try:
+        db.session.rollback()
+    except Exception:
+        pass
+    app.logger.error(f"Internal server error handled: {e}", exc_info=True)
+    return "The service is temporarily recovering from a database or connection timeout. Please refresh in a moment.", 500
 
 # Register Blueprints
 google_bp = create_google_blueprint()

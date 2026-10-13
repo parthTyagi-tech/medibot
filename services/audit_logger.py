@@ -182,6 +182,34 @@ class AuditLogger:
         )
 
     @classmethod
+    def log_classifier_routing(
+        cls,
+        session_id: str,
+        intent: str,
+        confidence: float,
+        latency_ms: float,
+        fallback_used: bool,
+        mode: str = "llm"
+    ) -> Dict[str, Any]:
+        """
+        Logs classification routing telemetry adhering to audit schema.
+        Crucial: raw user text is never logged.
+        """
+        return cls.log_event(
+            session_id=str(session_id or "unknown"),
+            event_type="CLASSIFIER_ROUTING",
+            condition=str(intent),
+            rule_triggered="FALLBACK_USED" if fallback_used else f"{mode.upper()}_CLASSIFICATION",
+            details={
+                "intent": str(intent),
+                "confidence": round(float(confidence), 4),
+                "latency_ms": round(float(latency_ms), 2),
+                "fallback_used": bool(fallback_used),
+                "mode": str(mode)
+            }
+        )
+
+    @classmethod
     def get_recent_audit_events(cls, limit: int = 50) -> List[Dict[str, Any]]:
         """Reads recent audit telemetry records from the audit log file."""
         if not os.path.exists(cls.LOG_PATH):

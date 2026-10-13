@@ -44,6 +44,18 @@ from services.task_dispatcher import (
     enqueue_memory_update,
     enqueue_title_update
 )
+from services.routing_service import route_query
+from services.llm_classifier import (
+    generate_greeting,
+    _is_greeting_sane,
+    get_static_greeting_fallback
+)
+from research.src.guardrails import apply_output_guardrails, NON_MEDICAL_REFUSAL
+from services.state_store import get_state_store, check_and_apply_ttl, check_emergency_resolution
+from services.output_guardrails import ClinicalOutputGuardrail
+from services.audit_logger import AuditLogger
+from research.src.clinical_parser import ClinicalEntityParser
+from research.src.clinical_triage import ClinicalTriageEngine
 
 voice_bp = Blueprint("voice", __name__)
 
@@ -71,13 +83,6 @@ def voice_chat():
         if stream:
             return Response("No message received", mimetype="text/plain")
         return jsonify({"response": "No message received"})
-        
-    if is_prompt_injection(msg):
-        refusal_msg = "I cannot fulfill this request. I am a medical AI assistant, and my instructions cannot be overridden."
-        if stream:
-            def g(): yield refusal_msg
-            return Response(stream_with_context(g()), mimetype="text/plain")
-        return jsonify({"response": refusal_msg})
 
     # Fetch user if user_id is provided
     user = None
@@ -104,41 +109,209 @@ def voice_chat():
     # Streaming path
     def g():
         try:
-            # 1. Fast Intent Classification
-            intent = classify_intent(classifierModel, msg)
-            print("=" * 50)
-            print("VOICE USER:", msg)
-            print("VOICE INTENT:", intent)
-            print("=" * 50)
-
-            # 2. Get active session and save user message if user is authenticated
             chat_session = None
             if user:
                 chat_session = get_active_session_for_user(user.id)
+
+            # Extract last 3 recent turns
+            recent_turns = []
+            if chat_session:
+                try:
+                    prior_messages = Message.query.filter_by(session_id=chat_session.id).order_by(Message.id.desc()).limit(3).all()
+                    for m in reversed(prior_messages):
+                        recent_turns.append({"role": m.role, "content": m.content})
+                except Exception:
+                    recent_turns = []
+
+            # Load persisted patient state
+            state_store = get_state_store()
+            patient_state = (state_store.get(str(chat_session.id)) if chat_session else None) or load_patient_state(chat_session)
+
+            # Unified route_query
+            route_decision = route_query(
+                msg=msg,
+                session=None,
+                patient_state=patient_state,
+                recent_turns=recent_turns,
+                session_id=str(chat_session.id if chat_session else "none")
+            )
+
+            # 1. BLOCKED_INJECTION
+            if route_decision.action == "BLOCKED_INJECTION":
+                yield route_decision.response or "Request blocked."
+                return
+
+            # 2. BLOCKED_EMERGENCY
+            if route_decision.action == "BLOCKED_EMERGENCY":
+                if chat_session:
+                    try:
+                        user_msg = Message(session_id=chat_session.id, role="user", content=msg)
+                        bot_msg = Message(session_id=chat_session.id, role="assistant", content=route_decision.response)
+                        db.session.add_all([user_msg, bot_msg])
+                        db.session.commit()
+                    except Exception:
+                        pass
+                yield route_decision.response or "Medical emergency detected."
+                return
+
+            # 3. NON_MEDICAL (Amendment 5: No memory, title, summarization, or eval tasks)
+            if route_decision.action == "NON_MEDICAL":
+                ans_refusal = route_decision.response or NON_MEDICAL_REFUSAL
+                if chat_session:
+                    try:
+                        user_msg = Message(session_id=chat_session.id, role="user", content=msg)
+                        bot_msg = Message(session_id=chat_session.id, role="assistant", content=ans_refusal)
+                        db.session.add_all([user_msg, bot_msg])
+                        db.session.commit()
+                    except Exception:
+                        pass
+                yield ans_refusal
+                return
+
+            # 4. GREETING (Amendment 5 & 9: timeout 2.0s, no disclaimer consumed, no title, no memory)
+            if route_decision.action == "GREETING":
+                raw_greeting = generate_greeting(msg, recent_turns=recent_turns, language=route_decision.language, timeout=2.0)
+                if not _is_greeting_sane(raw_greeting):
+                    raw_greeting = get_static_greeting_fallback(route_decision.language)
+                answer = apply_output_guardrails(raw_greeting, is_medical=False, show_disclaimer=False)
+                if chat_session:
+                    try:
+                        user_msg = Message(session_id=chat_session.id, role="user", content=msg)
+                        bot_msg = Message(session_id=chat_session.id, role="assistant", content=str(answer))
+                        db.session.add_all([user_msg, bot_msg])
+                        chat_session.updated_at = datetime.now(timezone.utc)
+                        db.session.commit()
+                    except Exception:
+                        pass
+                yield str(answer)
+                return
+
+            # 5. Handle ACCOUNT_ACTION turn
+            if route_decision.action == "ACCOUNT_ACTION":
+                ans_account = route_decision.response or "Please use the account controls available in the application."
+                if chat_session:
+                    try:
+                        user_msg = Message(session_id=chat_session.id, role="user", content=msg)
+                        bot_msg = Message(session_id=chat_session.id, role="assistant", content=ans_account)
+                        db.session.add_all([user_msg, bot_msg])
+                        chat_session.updated_at = datetime.now(timezone.utc)
+                        db.session.commit()
+                    except Exception:
+                        pass
+                yield ans_account
+                return
+
+            # 6. MEDICAL Path
+            if chat_session:
                 user_msg = Message(session_id=chat_session.id, role="user", content=msg)
                 db.session.add(user_msg)
                 db.session.commit()
 
-                # Trigger decoupled background memory update asynchronously (Phase A, B, C)
-                enqueue_memory_update(user.id, msg, build_history_text(chat_session))
-
-                # Trigger decoupled background title update asynchronously
-                if chat_session.title == "New Consultation":
-                    enqueue_title_update(chat_session.id, msg)
-
-            # 3. Setup patient state & prompt (DB-backed, parity with text path)
             history_text = build_history_text(chat_session) if chat_session else ""
             user_memory = get_user_memory(user) if user else "Voice Session"
-            patient_state = load_patient_state(chat_session)
+
+            if user and hasattr(user, "id"):
+                enqueue_memory_update(user.id, msg, history_text)
+
+            if chat_session and chat_session.title == "New Consultation":
+                enqueue_title_update(chat_session.id, msg)
+
+            if check_and_apply_ttl(patient_state) and chat_session:
+                AuditLogger.log_ttl_expired(session_id=str(chat_session.id))
+            if check_emergency_resolution(msg, patient_state) and chat_session:
+                AuditLogger.log_emergency_resolved(session_id=str(chat_session.id))
+
+            signals = ClinicalEntityParser.extract_clinical_signals(msg)
+            patient_state.transient_symptoms = signals.get("active_symptoms", [])
+
+            prev_snapshot = patient_state.get_diff_snapshot()
             patient_state = extract_patient_state(msg, patient_state)
+            has_new_structured_fact = patient_state.has_state_diff(prev_snapshot)
+
+            triage_eval = ClinicalTriageEngine.evaluate(msg, patient_state, signals)
+            if triage_eval and triage_eval.get("tier") == "RESOLVED":
+                if chat_session:
+                    AuditLogger.log_emergency_resolved(session_id=str(chat_session.id))
+                raw_answer = triage_eval["message"]
+                answer = apply_output_guardrails(
+                    raw_answer,
+                    is_medical=True,
+                    show_disclaimer=False,
+                    patient_state=patient_state
+                )
+                if chat_session:
+                    bot_msg = Message(session_id=chat_session.id, role="assistant", content=str(answer))
+                    db.session.add(bot_msg)
+                    save_patient_state(chat_session, patient_state)
+                    state_store.set(str(chat_session.id), patient_state)
+                    chat_session.updated_at = datetime.now(timezone.utc)
+                    db.session.commit()
+                yield str(answer)
+                return
+
+            if triage_eval and triage_eval.get("requires_escalation"):
+                patient_state.emergency_override_served = True
+                patient_state.risk_tier = "Emergency"
+                em_type = triage_eval.get("emergency_type", "FEBRILE_NEUTROPENIA")
+                patient_state.active_emergency = em_type
+                raw_answer = triage_eval["message"]
+                answer = apply_output_guardrails(
+                    raw_answer,
+                    is_medical=True,
+                    show_disclaimer=False,
+                    patient_state=patient_state,
+                    triage_tier="Emergency"
+                )
+                answer, guardrail_triggered = ClinicalOutputGuardrail.sanitize_response(answer, patient_state)
+                if chat_session:
+                    if guardrail_triggered:
+                        AuditLogger.log_guardrail_override(
+                            session_id=str(chat_session.id),
+                            condition="EMERGENCY_OUTPUT_GUARDRAIL",
+                            rule_triggered=answer.trigger_reason or "GUARDRAIL_INTERCEPTION",
+                            raw_tokens_intercepted=answer.intercepted_tokens
+                        )
+                    if em_type == "FEBRILE_NEUTROPENIA_CAREGIVER":
+                        AuditLogger.log_caregiver_intercept(
+                            session_id=str(chat_session.id),
+                            condition="FEBRILE_NEUTROPENIA_CAREGIVER",
+                            rule_triggered="CAREGIVER_TRIAGE_INTERCEPT"
+                        )
+                    else:
+                        AuditLogger.log_emergency_triggered(
+                            session_id=str(chat_session.id),
+                            condition=em_type,
+                            rule_triggered="CLINICAL_TRIAGE_ESCALATION"
+                        )
+
+                save_patient_state(chat_session, patient_state)
+                if chat_session:
+                    state_store.set(str(chat_session.id), patient_state)
+                    bot_msg = Message(session_id=chat_session.id, role="assistant", content=str(answer))
+                    db.session.add(bot_msg)
+                    chat_session.updated_at = datetime.now(timezone.utc)
+                    db.session.commit()
+                yield str(answer)
+                return
+
+            # Intent Determination: Derived from route_decision with zero double LLM calls
+            intent = classify_intent(
+                classifierModel,
+                msg,
+                route_decision=route_decision,
+                recent_turns=recent_turns,
+                patient_state=patient_state
+            )
+
             correction_alert = check_mid_conversation_correction(patient_state, history_text)
-            risk_tier, red_flags, override_guidance = evaluate_triage_tier(patient_state, msg)
             dosing_blocked, dosing_refusal = check_medication_contraindications(patient_state, msg)
+            risk_tier, red_flags, override_guidance = evaluate_triage_tier(
+                patient_state, msg, has_new_structured_fact=has_new_structured_fact
+            )
             patient_state.risk_tier = risk_tier
             patient_state.red_flags = red_flags
             dynamic_prompt = build_prompt(history_text, user_memory, user=user, patient_state=patient_state)
 
-            # 4. Stream response from LLM
             full_response = []
             if override_guidance and risk_tier == "Emergency":
                 text = override_guidance
@@ -153,7 +326,6 @@ def voice_chat():
                 yield text
                 full_response.append(text)
             elif intent == "medical_query":
-                # Retrieve documents from Pinecone
                 try:
                     docs = retriever.invoke(msg)
                     context = "\n\n".join([doc.page_content for doc in docs])
@@ -183,10 +355,11 @@ def voice_chat():
                     yield prompt_val
                     full_response.append(prompt_val)
                     prompt_val = None
-                elif intent == "general_chat":
-                    prompt_val = f"Conversation History:\n{history_text}\n\nUser:\n{msg}"
                 else:
-                    prompt_val = msg
+                    prompt_val = NON_MEDICAL_REFUSAL
+                    yield prompt_val
+                    full_response.append(prompt_val)
+                    prompt_val = None
 
                 if prompt_val:
                     for chunk in chatModel.stream(prompt_val):
@@ -195,8 +368,9 @@ def voice_chat():
                             yield text
                             full_response.append(text)
 
-            # 5. Save patient state + assistant response to DB
             save_patient_state(chat_session, patient_state)
+            if chat_session:
+                state_store.set(str(chat_session.id), patient_state)
             if chat_session and full_response:
                 bot_answer = "".join(full_response)
                 bot_msg = Message(session_id=chat_session.id, role="assistant", content=bot_answer)

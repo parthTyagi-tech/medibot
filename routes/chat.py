@@ -72,13 +72,39 @@ from services.state_store import (
 from services.output_guardrails import ClinicalOutputGuardrail
 from services.audit_logger import AuditLogger
 from research.src.clinical_parser import ClinicalEntityParser
+from services.routing_service import route_query, RouteDecision
+from services.llm_classifier import (
+    generate_greeting,
+    _is_greeting_sane,
+    get_static_greeting_fallback
+)
 
 
 @chat_bp.route("/health", methods=["GET"])
 @chat_bp.route("/ping", methods=["GET"])
 def health():
+    db_status = "ok"
+    try:
+        from research.src.auth import db
+        from sqlalchemy import text
+        db.session.execute(text("SELECT 1"))
+    except Exception as e:
+        logger.warning(f"Database health check failed: {e}")
+        try:
+            from research.src.auth import db
+            db.session.rollback()
+        except Exception:
+            pass
+        return jsonify({
+            "status": "degraded",
+            "database": f"error: {str(e)}",
+            "service": "MediAssist AI",
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        }), 503
+
     return jsonify({
         "status": "healthy",
+        "database": db_status,
         "service": "MediAssist AI",
         "timestamp": datetime.now(timezone.utc).isoformat()
     }), 200
@@ -180,23 +206,109 @@ def handle_chat_turn(msg: str, user=None) -> str:
     except Exception:
         pass
 
-    # 1. Run Input Guardrails (Prompt injection, Content safety, Medical emergency)
-    is_blocked, category, guard_msg = app_module.apply_input_guardrails(msg)
-    if is_blocked:
-        if category == "medical_emergency":
+    try:
+        chat_session = get_active_session()
+    except Exception:
+        chat_session = None
+
+    # Load or initialize structured patient state (State Store + DB backed)
+    state_store = get_state_store()
+    patient_state = (state_store.get(str(chat_session.id)) if chat_session else None) or load_patient_state(chat_session)
+
+    # Sync with session["patient_state"]
+    try:
+        sess_ps = session.get("patient_state", {})
+        if sess_ps:
+            if sess_ps.get("has_cancer_history"):
+                patient_state.has_cancer_history = True
+            if sess_ps.get("active_emergency"):
+                patient_state.active_emergency = sess_ps.get("active_emergency")
+            if sess_ps.get("emergency_turn_count", 0) > patient_state.emergency_turn_count:
+                patient_state.emergency_turn_count = sess_ps["emergency_turn_count"]
+    except Exception:
+        pass
+
+    # Extract last 3 recent turns from chat_session messages
+    recent_turns = []
+    if chat_session:
+        try:
+            prior_messages = Message.query.filter_by(session_id=chat_session.id).order_by(Message.id.desc()).limit(3).all()
+            for m in reversed(prior_messages):
+                recent_turns.append({"role": m.role, "content": m.content})
+        except Exception:
+            recent_turns = []
+
+    # Run unified route_query (injection -> emergency -> mode check -> classifier -> confidence)
+    route_decision = route_query(
+        msg=msg,
+        session=session,
+        patient_state=patient_state,
+        recent_turns=recent_turns,
+        session_id=str(chat_session.id if chat_session else "none")
+    )
+
+    # Handle BLOCKED_INJECTION or BLOCKED_EMERGENCY
+    if route_decision.action == "BLOCKED_INJECTION":
+        return route_decision.response or "Request blocked."
+
+    if route_decision.action == "BLOCKED_EMERGENCY":
+        if chat_session:
             try:
-                chat_session = get_active_session()
                 user_msg = Message(session_id=chat_session.id, role="user", content=msg)
-                bot_msg = Message(session_id=chat_session.id, role="assistant", content=guard_msg)
+                bot_msg = Message(session_id=chat_session.id, role="assistant", content=route_decision.response)
                 db.session.add_all([user_msg, bot_msg])
                 db.session.commit()
             except Exception:
                 pass
-        return guard_msg
+        return route_decision.response or "Medical emergency detected."
 
+    # Handle NON_MEDICAL turn (Amendment 5: No title, memory, summarization, or eval enqueued)
+    if route_decision.action == "NON_MEDICAL":
+        ans_refusal = route_decision.response or app_module.NON_MEDICAL_REFUSAL
+        if chat_session:
+            try:
+                user_msg = Message(session_id=chat_session.id, role="user", content=msg)
+                bot_msg = Message(session_id=chat_session.id, role="assistant", content=ans_refusal)
+                db.session.add_all([user_msg, bot_msg])
+                db.session.commit()
+            except Exception:
+                pass
+        return ans_refusal
+
+    # Handle GREETING turn (Amendment 5: No RAG, no triage, no patient_state mutation, no disclaimer consumed)
+    if route_decision.action == "GREETING":
+        raw_greeting = generate_greeting(msg, recent_turns=recent_turns, language=route_decision.language)
+        if not _is_greeting_sane(raw_greeting):
+            raw_greeting = get_static_greeting_fallback(route_decision.language)
+        answer = app_module.apply_output_guardrails(raw_greeting, is_medical=False, show_disclaimer=False)
+        if chat_session:
+            try:
+                user_msg = Message(session_id=chat_session.id, role="user", content=msg)
+                bot_msg = Message(session_id=chat_session.id, role="assistant", content=str(answer))
+                db.session.add_all([user_msg, bot_msg])
+                chat_session.updated_at = datetime.now(timezone.utc)
+                db.session.commit()
+            except Exception:
+                pass
+        return str(answer)
+
+    # Handle ACCOUNT_ACTION turn
+    if route_decision.action == "ACCOUNT_ACTION":
+        ans_account = route_decision.response or "Please use the account controls available in the navigation bar to manage your account or consultation history."
+        if chat_session:
+            try:
+                user_msg = Message(session_id=chat_session.id, role="user", content=msg)
+                bot_msg = Message(session_id=chat_session.id, role="assistant", content=ans_account)
+                db.session.add_all([user_msg, bot_msg])
+                db.session.commit()
+            except Exception:
+                pass
+        return ans_account
+
+    # ─────────────────────────────────────────────────────────────
+    # MEDICAL Turn: Existing Clinical Triage, RAG & Output Guardrails
+    # ─────────────────────────────────────────────────────────────
     try:
-        chat_session = get_active_session()
-
         user_msg = Message(session_id=chat_session.id, role="user", content=msg)
         db.session.add(user_msg)
         db.session.commit()
@@ -208,7 +320,7 @@ def handle_chat_turn(msg: str, user=None) -> str:
         if user and hasattr(user, "id"):
             enqueue_memory_update(user.id, msg, history_text)
 
-        # Trigger decoupled background title update asynchronously
+        # Trigger decoupled background title update only on first MEDICAL message
         if chat_session.title == "New Consultation":
             enqueue_title_update(chat_session.id, msg)
 
@@ -217,51 +329,15 @@ def handle_chat_turn(msg: str, user=None) -> str:
         if msg_count >= 6 and msg_count % 4 == 0:
             enqueue_session_summarize(chat_session.id, msg_count)
 
-        # Load or initialize structured patient state (State Store + DB backed)
-        state_store = get_state_store()
-        patient_state = state_store.get(str(chat_session.id)) or load_patient_state(chat_session)
-
         # Apply TTL auto-expiration and check affirmative resolution
         if check_and_apply_ttl(patient_state):
             AuditLogger.log_ttl_expired(session_id=str(chat_session.id))
         if check_emergency_resolution(msg, patient_state):
             AuditLogger.log_emergency_resolved(session_id=str(chat_session.id))
 
-        # Sync with session["patient_state"] (persistent medical history only, NOT accumulator symptoms)
-        try:
-            sess_ps = session.get("patient_state", {})
-            if sess_ps:
-                if sess_ps.get("has_cancer_history"):
-                    patient_state.has_cancer_history = True
-                if sess_ps.get("active_emergency"):
-                    patient_state.active_emergency = sess_ps.get("active_emergency")
-                if sess_ps.get("emergency_turn_count", 0) > patient_state.emergency_turn_count:
-                    patient_state.emergency_turn_count = sess_ps["emergency_turn_count"]
-                # Stale current_symptoms are not synced across turns to prevent accumulator poisoning
-        except Exception:
-            pass
-
         # Extract per-turn clinical signals
         signals = ClinicalEntityParser.extract_clinical_signals(msg)
         patient_state.transient_symptoms = signals.get("active_symptoms", [])
-
-        # Pure greeting bypass: Return nurse-grade context-aware greeting without clinical lecture
-        is_pure_greeting = is_greeting_text(msg) and not signals.get("has_clinical_signals", False)
-        if is_pure_greeting:
-            first_name = user.name.split()[0] if user and hasattr(user, "name") and user.name else "there"
-            raw_answer = format_context_aware_greeting(patient_state, first_name=first_name, msg=msg)
-            answer = app_module.apply_output_guardrails(raw_answer, is_medical=False, show_disclaimer=False)
-            bot_msg = Message(session_id=chat_session.id, role="assistant", content=str(answer))
-            db.session.add(bot_msg)
-            save_patient_state(chat_session, patient_state)
-            state_store.set(str(chat_session.id), patient_state)
-            chat_session.updated_at = datetime.now(timezone.utc)
-            db.session.commit()
-            try:
-                session["patient_state"] = patient_state.to_dict()
-            except Exception:
-                pass
-            return str(answer)
 
         prev_snapshot = patient_state.get_diff_snapshot()
         patient_state = extract_patient_state(msg, patient_state, llm=app_module.classifierModel)
@@ -348,12 +424,14 @@ def handle_chat_turn(msg: str, user=None) -> str:
                 pass
             return str(answer)
 
-        # Generic Intent Classification (only if no pre-intent emergency triggered)
-        intent = app_module.classify_intent(app_module.classifierModel, msg)
-        print("=" * 50)
-        print("USER:", msg)
-        print("INTENT:", intent)
-        print("=" * 50)
+        # Intent Determination in Medical/Conversation path (derived from route_decision with zero double LLM calls)
+        intent = app_module.classify_intent(
+            app_module.classifierModel,
+            msg,
+            route_decision=route_decision,
+            recent_turns=recent_turns,
+            patient_state=patient_state
+        )
 
         # Check for mid-conversation high-risk disclosure correction
         correction_alert = check_mid_conversation_correction(patient_state, history_text)

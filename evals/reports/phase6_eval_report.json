@@ -1,0 +1,470 @@
+{
+  "timestamp": "2026-10-13T08:08:52.463147+00:00",
+  "model_id": "openai/gpt-oss-120b",
+  "dataset_version": "1.0.0",
+  "dataset_path": "evals/dataset/intent_benchmarks.json",
+  "total_cases": 108,
+  "status": "VALID & PASSED",
+  "exit_code": 0,
+  "passed": true,
+  "is_invalid": false,
+  "repeat_passes": 2,
+  "stability": {
+    "recall_stable_across_passes": true,
+    "label_flips_count": 0,
+    "label_flips": []
+  },
+  "metrics": {
+    "total_cases": 108,
+    "correct_cases": 107,
+    "overall_accuracy_pct": 99.07,
+    "medical_cases_total": 68,
+    "medical_recall_pct": 100.0,
+    "medical_misses": 0,
+    "greeting_on_symptom_errors": 0,
+    "non_medical_cases_total": 22,
+    "non_medical_precision_pct": 100.0,
+    "non_medical_fpr_pct": 0.0,
+    "fallback_count": 0,
+    "fallback_rate_pct": 0.0,
+    "pre_filtered_count": 2,
+    "classifier_count": 106,
+    "classifier_accuracy_pct": 99.06,
+    "confusion_matrix": {
+      "MEDICAL": {
+        "MEDICAL": 68,
+        "GREETING": 0,
+        "NON_MEDICAL": 0
+      },
+      "GREETING": {
+        "MEDICAL": 1,
+        "GREETING": 17,
+        "NON_MEDICAL": 0
+      },
+      "NON_MEDICAL": {
+        "MEDICAL": 0,
+        "GREETING": 0,
+        "NON_MEDICAL": 22
+      }
+    },
+    "language_breakdown": {
+      "de": {
+        "total": 14,
+        "correct": 14,
+        "accuracy_pct": 100.0,
+        "medical_recall_pct": 100.0,
+        "fallbacks": 0
+      },
+      "en": {
+        "total": 24,
+        "correct": 23,
+        "accuracy_pct": 95.83,
+        "medical_recall_pct": 100.0,
+        "fallbacks": 0
+      },
+      "es": {
+        "total": 14,
+        "correct": 14,
+        "accuracy_pct": 100.0,
+        "medical_recall_pct": 100.0,
+        "fallbacks": 0
+      },
+      "fr": {
+        "total": 14,
+        "correct": 14,
+        "accuracy_pct": 100.0,
+        "medical_recall_pct": 100.0,
+        "fallbacks": 0
+      },
+      "it": {
+        "total": 14,
+        "correct": 14,
+        "accuracy_pct": 100.0,
+        "medical_recall_pct": 100.0,
+        "fallbacks": 0
+      },
+      "ja": {
+        "total": 14,
+        "correct": 14,
+        "accuracy_pct": 100.0,
+        "medical_recall_pct": 100.0,
+        "fallbacks": 0
+      },
+      "nl": {
+        "total": 14,
+        "correct": 14,
+        "accuracy_pct": 100.0,
+        "medical_recall_pct": 100.0,
+        "fallbacks": 0
+      }
+    },
+    "category_breakdown": {
+      "greeting_plus_symptom": {
+        "total": 7,
+        "correct": 7,
+        "pass_rate_pct": 100.0
+      },
+      "greeting_pure": {
+        "total": 18,
+        "correct": 17,
+        "pass_rate_pct": 94.44
+      },
+      "medical_adversarial_injection": {
+        "total": 1,
+        "correct": 1,
+        "pass_rate_pct": 100.0
+      },
+      "medical_crisis_mental_health": {
+        "total": 7,
+        "correct": 7,
+        "pass_rate_pct": 100.0
+      },
+      "medical_health_adjacent": {
+        "total": 17,
+        "correct": 17,
+        "pass_rate_pct": 100.0
+      },
+      "medical_medication": {
+        "total": 7,
+        "correct": 7,
+        "pass_rate_pct": 100.0
+      },
+      "medical_symptom": {
+        "total": 22,
+        "correct": 22,
+        "pass_rate_pct": 100.0
+      },
+      "medical_triage_followup": {
+        "total": 7,
+        "correct": 7,
+        "pass_rate_pct": 100.0
+      },
+      "non_medical_coding": {
+        "total": 8,
+        "correct": 8,
+        "pass_rate_pct": 100.0
+      },
+      "non_medical_jailbreak": {
+        "total": 1,
+        "correct": 1,
+        "pass_rate_pct": 100.0
+      },
+      "non_medical_trivia_math": {
+        "total": 13,
+        "correct": 13,
+        "pass_rate_pct": 100.0
+      }
+    }
+  },
+  "failures": [
+    {
+      "id": "BENCH-EN-15",
+      "language": "en",
+      "category": "greeting_pure",
+      "query": "Who are you and what kind of medical help do you provide?",
+      "expected_intent": "GREETING",
+      "expected_route": "GREETING",
+      "predicted_action": "MEDICAL",
+      "predicted_intent": "MEDICAL",
+      "mapped_prediction": "MEDICAL",
+      "confidence": 1.0,
+      "fallback_used": false,
+      "pre_filtered": false,
+      "is_correct": false,
+      "is_greeting_on_symptom": false,
+      "is_medical_miss": false
+    }
+  ],
+  "pass_history": [
+    {
+      "pass_number": 1,
+      "metrics": {
+        "total_cases": 108,
+        "correct_cases": 107,
+        "overall_accuracy_pct": 99.07,
+        "medical_cases_total": 68,
+        "medical_recall_pct": 100.0,
+        "medical_misses": 0,
+        "greeting_on_symptom_errors": 0,
+        "non_medical_cases_total": 22,
+        "non_medical_precision_pct": 100.0,
+        "non_medical_fpr_pct": 0.0,
+        "fallback_count": 0,
+        "fallback_rate_pct": 0.0,
+        "pre_filtered_count": 2,
+        "classifier_count": 106,
+        "classifier_accuracy_pct": 99.06,
+        "confusion_matrix": {
+          "MEDICAL": {
+            "MEDICAL": 68,
+            "GREETING": 0,
+            "NON_MEDICAL": 0
+          },
+          "GREETING": {
+            "MEDICAL": 1,
+            "GREETING": 17,
+            "NON_MEDICAL": 0
+          },
+          "NON_MEDICAL": {
+            "MEDICAL": 0,
+            "GREETING": 0,
+            "NON_MEDICAL": 22
+          }
+        },
+        "language_breakdown": {
+          "de": {
+            "total": 14,
+            "correct": 14,
+            "accuracy_pct": 100.0,
+            "medical_recall_pct": 100.0,
+            "fallbacks": 0
+          },
+          "en": {
+            "total": 24,
+            "correct": 23,
+            "accuracy_pct": 95.83,
+            "medical_recall_pct": 100.0,
+            "fallbacks": 0
+          },
+          "es": {
+            "total": 14,
+            "correct": 14,
+            "accuracy_pct": 100.0,
+            "medical_recall_pct": 100.0,
+            "fallbacks": 0
+          },
+          "fr": {
+            "total": 14,
+            "correct": 14,
+            "accuracy_pct": 100.0,
+            "medical_recall_pct": 100.0,
+            "fallbacks": 0
+          },
+          "it": {
+            "total": 14,
+            "correct": 14,
+            "accuracy_pct": 100.0,
+            "medical_recall_pct": 100.0,
+            "fallbacks": 0
+          },
+          "ja": {
+            "total": 14,
+            "correct": 14,
+            "accuracy_pct": 100.0,
+            "medical_recall_pct": 100.0,
+            "fallbacks": 0
+          },
+          "nl": {
+            "total": 14,
+            "correct": 14,
+            "accuracy_pct": 100.0,
+            "medical_recall_pct": 100.0,
+            "fallbacks": 0
+          }
+        },
+        "category_breakdown": {
+          "greeting_plus_symptom": {
+            "total": 7,
+            "correct": 7,
+            "pass_rate_pct": 100.0
+          },
+          "greeting_pure": {
+            "total": 18,
+            "correct": 17,
+            "pass_rate_pct": 94.44
+          },
+          "medical_adversarial_injection": {
+            "total": 1,
+            "correct": 1,
+            "pass_rate_pct": 100.0
+          },
+          "medical_crisis_mental_health": {
+            "total": 7,
+            "correct": 7,
+            "pass_rate_pct": 100.0
+          },
+          "medical_health_adjacent": {
+            "total": 17,
+            "correct": 17,
+            "pass_rate_pct": 100.0
+          },
+          "medical_medication": {
+            "total": 7,
+            "correct": 7,
+            "pass_rate_pct": 100.0
+          },
+          "medical_symptom": {
+            "total": 22,
+            "correct": 22,
+            "pass_rate_pct": 100.0
+          },
+          "medical_triage_followup": {
+            "total": 7,
+            "correct": 7,
+            "pass_rate_pct": 100.0
+          },
+          "non_medical_coding": {
+            "total": 8,
+            "correct": 8,
+            "pass_rate_pct": 100.0
+          },
+          "non_medical_jailbreak": {
+            "total": 1,
+            "correct": 1,
+            "pass_rate_pct": 100.0
+          },
+          "non_medical_trivia_math": {
+            "total": 13,
+            "correct": 13,
+            "pass_rate_pct": 100.0
+          }
+        }
+      }
+    },
+    {
+      "pass_number": 2,
+      "metrics": {
+        "total_cases": 108,
+        "correct_cases": 107,
+        "overall_accuracy_pct": 99.07,
+        "medical_cases_total": 68,
+        "medical_recall_pct": 100.0,
+        "medical_misses": 0,
+        "greeting_on_symptom_errors": 0,
+        "non_medical_cases_total": 22,
+        "non_medical_precision_pct": 100.0,
+        "non_medical_fpr_pct": 0.0,
+        "fallback_count": 0,
+        "fallback_rate_pct": 0.0,
+        "pre_filtered_count": 2,
+        "classifier_count": 106,
+        "classifier_accuracy_pct": 99.06,
+        "confusion_matrix": {
+          "MEDICAL": {
+            "MEDICAL": 68,
+            "GREETING": 0,
+            "NON_MEDICAL": 0
+          },
+          "GREETING": {
+            "MEDICAL": 1,
+            "GREETING": 17,
+            "NON_MEDICAL": 0
+          },
+          "NON_MEDICAL": {
+            "MEDICAL": 0,
+            "GREETING": 0,
+            "NON_MEDICAL": 22
+          }
+        },
+        "language_breakdown": {
+          "de": {
+            "total": 14,
+            "correct": 14,
+            "accuracy_pct": 100.0,
+            "medical_recall_pct": 100.0,
+            "fallbacks": 0
+          },
+          "en": {
+            "total": 24,
+            "correct": 23,
+            "accuracy_pct": 95.83,
+            "medical_recall_pct": 100.0,
+            "fallbacks": 0
+          },
+          "es": {
+            "total": 14,
+            "correct": 14,
+            "accuracy_pct": 100.0,
+            "medical_recall_pct": 100.0,
+            "fallbacks": 0
+          },
+          "fr": {
+            "total": 14,
+            "correct": 14,
+            "accuracy_pct": 100.0,
+            "medical_recall_pct": 100.0,
+            "fallbacks": 0
+          },
+          "it": {
+            "total": 14,
+            "correct": 14,
+            "accuracy_pct": 100.0,
+            "medical_recall_pct": 100.0,
+            "fallbacks": 0
+          },
+          "ja": {
+            "total": 14,
+            "correct": 14,
+            "accuracy_pct": 100.0,
+            "medical_recall_pct": 100.0,
+            "fallbacks": 0
+          },
+          "nl": {
+            "total": 14,
+            "correct": 14,
+            "accuracy_pct": 100.0,
+            "medical_recall_pct": 100.0,
+            "fallbacks": 0
+          }
+        },
+        "category_breakdown": {
+          "greeting_plus_symptom": {
+            "total": 7,
+            "correct": 7,
+            "pass_rate_pct": 100.0
+          },
+          "greeting_pure": {
+            "total": 18,
+            "correct": 17,
+            "pass_rate_pct": 94.44
+          },
+          "medical_adversarial_injection": {
+            "total": 1,
+            "correct": 1,
+            "pass_rate_pct": 100.0
+          },
+          "medical_crisis_mental_health": {
+            "total": 7,
+            "correct": 7,
+            "pass_rate_pct": 100.0
+          },
+          "medical_health_adjacent": {
+            "total": 17,
+            "correct": 17,
+            "pass_rate_pct": 100.0
+          },
+          "medical_medication": {
+            "total": 7,
+            "correct": 7,
+            "pass_rate_pct": 100.0
+          },
+          "medical_symptom": {
+            "total": 22,
+            "correct": 22,
+            "pass_rate_pct": 100.0
+          },
+          "medical_triage_followup": {
+            "total": 7,
+            "correct": 7,
+            "pass_rate_pct": 100.0
+          },
+          "non_medical_coding": {
+            "total": 8,
+            "correct": 8,
+            "pass_rate_pct": 100.0
+          },
+          "non_medical_jailbreak": {
+            "total": 1,
+            "correct": 1,
+            "pass_rate_pct": 100.0
+          },
+          "non_medical_trivia_math": {
+            "total": 13,
+            "correct": 13,
+            "pass_rate_pct": 100.0
+          }
+        }
+      }
+    }
+  ]
+}

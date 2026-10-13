@@ -1,6 +1,20 @@
 import re
-from typing import Tuple, Optional
+from typing import Tuple, Optional, List, Dict, Any
 from research.src.guardrails import is_code_or_programming_request
+from services.classifier_config import get_classifier_config
+
+# Anchored regexes for whole-message matching (Amendment 4 & 8)
+# Evaluated strictly as whole-message/anchored, preventing medical queries containing "logout" from misclassifying.
+ANCHORED_ACCOUNT_REGEX = re.compile(
+    r"^\s*(delete\s+(my\s+)?account|delete\s+this\s+consultation|delete\s+chat|log\s*out|sign\s*out)\s*[.?!]*$",
+    re.IGNORECASE
+)
+ANCHORED_MEMORY_REGEX = re.compile(
+    r"^\s*(what\s+symptoms\s+did\s+i\s+mention|what\s+do\s+you\s+know\s+about\s+me|what\s+did\s+i\s+tell\s+you|"
+    r"what\s+was\s+my\s+allergy|what\s+medications?\s+am\s+i\s+taking|my\s+past\s+consultations|"
+    r"recall\s+my\s+symptoms|recall\s+my\s+medical\s+history|remember\s+what\s+i\s+said|what\s+is\s+my\s+diagnosis)\s*[.?!]*$",
+    re.IGNORECASE
+)
 
 # Comprehensive list of medical keyword roots for instant 0ms classification
 MEDICAL_KEYWORDS = {
@@ -57,7 +71,11 @@ def is_third_party_query(text: str) -> Tuple[bool, Optional[str]]:
     return False, None
 
 
-def classify_intent(chatModel, message: str) -> str:
+def _classify_intent_regex(chatModel, message: str) -> str:
+    """
+    Legacy regex and keyword-based intent classification.
+    Used exclusively in regex mode (INTENT_CLASSIFIER_MODE=regex).
+    """
     if not message or not isinstance(message, str):
         return "general_chat"
 
@@ -65,16 +83,11 @@ def classify_intent(chatModel, message: str) -> str:
     msg_words = set(re.findall(r"\b[a-zA-Z]+\b", msg_clean))
 
     # 0. Canonical code/script/programming request check (Single Source of Truth)
-    # Must evaluate first, independently of any medical keywords in the message
     if is_code_or_programming_request(message):
         return "general_chat"
 
-    # 1. Account action detection
-    account_phrases = [
-        "delete my account", "delete this consultation", "logout", "log out", 
-        "sign out", "signout", "delete account", "delete chat"
-    ]
-    if any(phrase in msg_clean for phrase in account_phrases):
+    # 1. Anchored Account action detection (Amendment 4 & 8)
+    if ANCHORED_ACCOUNT_REGEX.match(msg_clean):
         return "account_action"
 
     # 2. Greetings (when short)
@@ -85,13 +98,8 @@ def classify_intent(chatModel, message: str) -> str:
     if (msg_clean.rstrip("?!.") in greetings or any(msg_clean.startswith(g + " ") for g in greetings)) and len(msg_words) <= 4:
         return "greeting"
 
-    # 3. Memory recall detection
-    memory_phrases = [
-        "what symptoms did i mention", "what do you know about me", "my previous", 
-        "what did i tell you", "my diagnosis", "remember what i said", "recall my",
-        "what was my allergy", "what medications am i taking", "my past consultations"
-    ]
-    if any(phrase in msg_clean for phrase in memory_phrases):
+    # 3. Anchored Memory recall detection (Amendment 4 & 8)
+    if ANCHORED_MEMORY_REGEX.match(msg_clean):
         return "memory_recall"
 
     # 4. Third-party health / support query detection
@@ -108,7 +116,8 @@ def classify_intent(chatModel, message: str) -> str:
         return "medical_query"
 
     # 7. LLM Classification fallback for edge cases
-    prompt = f"""You are a strict intent classifier for MediAssist, a specialized medical assistant.
+    if chatModel:
+        prompt = f"""You are a strict intent classifier for MediAssist, a specialized medical assistant.
 Classify the user's message into exactly ONE of the following:
 - greeting
 - medical_query (any health, symptom, body, medicine, or wellness question)
@@ -119,19 +128,90 @@ Classify the user's message into exactly ONE of the following:
 Return ONLY the classification word.
 
 User: {message}"""
+        try:
+            response = chatModel.invoke(prompt)
+            content = (response.content if hasattr(response, "content") else str(response)).strip().lower()
+            allowed_intents = ["medical_query", "greeting", "memory_recall", "account_action", "third_party_query", "general_chat"]
+            for intent in allowed_intents:
+                if intent in content:
+                    return intent
+            return "general_chat"
+        except Exception as e:
+            print("[Intent Classifier] Fallback error:", e)
 
-    try:
-        response = chatModel.invoke(prompt)
-        content = (response.content if hasattr(response, "content") else str(response)).strip().lower()
-        
-        allowed_intents = ["medical_query", "greeting", "memory_recall", "account_action", "third_party_query", "general_chat"]
-        for intent in allowed_intents:
-            if intent in content:
-                return intent
-                
-        return "general_chat"
-    except Exception as e:
-        print("[Intent Classifier] Fallback error:", e)
-        # Default to medical_query if any doubt, or general_chat
-        return "medical_query" if any(w in msg_clean for w in ["help", "feel", "body", "hurt"]) else "general_chat"
+    return "medical_query" if any(w in msg_clean for w in ["help", "feel", "body", "hurt"]) else "general_chat"
+
+
+def classify_intent(
+    chatModel=None,
+    message: str = "",
+    route_decision: Optional[Any] = None,
+    recent_turns: Optional[List[Dict[str, str]]] = None,
+    patient_state: Optional[Any] = None
+) -> str:
+    """
+    Classifies or maps user message into legacy intent labels:
+    - 'medical_query'
+    - 'third_party_query'
+    - 'greeting'
+    - 'memory_recall'
+    - 'account_action'
+    - 'general_chat'
+
+    In LLM mode:
+    - If route_decision is already computed by route_query(), derives the legacy label
+      directly from route_decision with ZERO additional LLM calls.
+    - If route_decision is not provided, invokes route_query() preserving context
+      (recent_turns, patient_state) and maps the result.
+      NEVER calls classify_query(user_text=message) without context!
+
+    In regex mode:
+    - Runs _classify_intent_regex only. ZERO Groq calls.
+    """
+    cfg = get_classifier_config()
+
+    # If route_decision was precomputed, map it directly (Amendment 2: ZERO double LLM calls)
+    if route_decision is not None:
+        action = getattr(route_decision, "action", "")
+        intent = getattr(route_decision, "intent", "")
+
+        if action == "BLOCKED_INJECTION":
+            return "general_chat"
+        if action == "BLOCKED_EMERGENCY":
+            return "medical_query"
+        if action == "ACCOUNT_ACTION" or intent == "account_action":
+            return "account_action"
+        if action == "MEMORY_RECALL" or intent == "memory_recall":
+            return "memory_recall"
+        if intent == "NON_MEDICAL" or action == "NON_MEDICAL":
+            return "general_chat"
+        if intent == "GREETING" or action == "GREETING":
+            return "greeting"
+
+        # Medical intent: check for third-party sub-route
+        is_tp, _ = is_third_party_query(message)
+        if is_tp:
+            return "third_party_query"
+        return "medical_query"
+
+    # When route_decision is not precomputed (e.g. legacy caller / test):
+    if cfg.mode == "regex":
+        return _classify_intent_regex(chatModel, message)
+
+    # In LLM mode without precomputed route_decision:
+    # Delegate to route_query preserving all available context
+    from services.routing_service import route_query
+    decision = route_query(
+        msg=message,
+        patient_state=patient_state,
+        recent_turns=recent_turns
+    )
+    return classify_intent(
+        chatModel=chatModel,
+        message=message,
+        route_decision=decision,
+        recent_turns=recent_turns,
+        patient_state=patient_state
+    )
+
 

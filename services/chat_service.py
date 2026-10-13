@@ -255,27 +255,113 @@ def generate_voice_response(msg: str, user=None) -> str:
         check_medication_contraindications,
         check_mid_conversation_correction,
     )
+    from services.routing_service import route_query
+    from services.llm_classifier import (
+        generate_greeting,
+        _is_greeting_sane,
+        get_static_greeting_fallback
+    )
+    from services.task_dispatcher import (
+        enqueue_memory_update,
+        enqueue_title_update
+    )
+    from services.state_store import get_state_store, check_and_apply_ttl, check_emergency_resolution
+    from services.output_guardrails import ClinicalOutputGuardrail
+    from services.audit_logger import AuditLogger
+    from research.src.clinical_parser import ClinicalEntityParser
+
     try:
         logger.info(f"[generate_voice_response] START — msg='{msg[:60]}', user_id={getattr(user, 'id', None)}")
-
-        # 1. Run Input Guardrails (Prompt injection, Content safety, Medical emergency)
-        is_blocked, category, guard_msg = app.apply_input_guardrails(msg)
-        if is_blocked:
-            logger.info(f"[generate_voice_response] Blocked by guardrail ({category})")
-            if category == "medical_emergency" and user:
-                try:
-                    chat_session = get_active_session_for_user(user.id)
-                    user_msg = Message(session_id=chat_session.id, role="user", content=msg)
-                    bot_msg = Message(session_id=chat_session.id, role="assistant", content=guard_msg)
-                    db.session.add_all([user_msg, bot_msg])
-                    db.session.commit()
-                except Exception:
-                    pass
-            return guard_msg
 
         chat_session = None
         if user:
             chat_session = get_active_session_for_user(user.id)
+
+        # Extract last 3 recent turns from chat_session messages
+        recent_turns = []
+        if chat_session:
+            try:
+                prior_messages = Message.query.filter_by(session_id=chat_session.id).order_by(Message.id.desc()).limit(3).all()
+                for m in reversed(prior_messages):
+                    recent_turns.append({"role": m.role, "content": m.content})
+            except Exception:
+                recent_turns = []
+
+        # Load persisted patient state from State Store or DB
+        state_store = get_state_store()
+        patient_state = (state_store.get(str(chat_session.id)) if chat_session else None) or load_patient_state(chat_session)
+
+        # Run unified route_query (injection -> emergency -> mode check -> classifier -> confidence)
+        route_decision = route_query(
+            msg=msg,
+            session=None,
+            patient_state=patient_state,
+            recent_turns=recent_turns,
+            session_id=str(chat_session.id if chat_session else "none")
+        )
+
+        # 1. Handle BLOCKED_INJECTION
+        if route_decision.action == "BLOCKED_INJECTION":
+            return route_decision.response or "Request blocked."
+
+        # 2. Handle BLOCKED_EMERGENCY
+        if route_decision.action == "BLOCKED_EMERGENCY":
+            if chat_session:
+                try:
+                    user_msg = Message(session_id=chat_session.id, role="user", content=msg)
+                    bot_msg = Message(session_id=chat_session.id, role="assistant", content=route_decision.response)
+                    db.session.add_all([user_msg, bot_msg])
+                    db.session.commit()
+                except Exception:
+                    pass
+            return route_decision.response or "Medical emergency detected."
+
+        # 3. Handle NON_MEDICAL turn (Amendment 5: No title, memory, summarization, or eval enqueued)
+        if route_decision.action == "NON_MEDICAL":
+            ans_refusal = route_decision.response or app.NON_MEDICAL_REFUSAL
+            if chat_session:
+                try:
+                    user_msg = Message(session_id=chat_session.id, role="user", content=msg)
+                    bot_msg = Message(session_id=chat_session.id, role="assistant", content=ans_refusal)
+                    db.session.add_all([user_msg, bot_msg])
+                    db.session.commit()
+                except Exception:
+                    pass
+            return ans_refusal
+
+        # 4. Handle GREETING turn (Amendment 5 & 9: timeout 2.0s, no disclaimer consumed, no title, no memory)
+        if route_decision.action == "GREETING":
+            raw_greeting = generate_greeting(msg, recent_turns=recent_turns, language=route_decision.language, timeout=2.0)
+            if not _is_greeting_sane(raw_greeting):
+                raw_greeting = get_static_greeting_fallback(route_decision.language)
+            answer = app.apply_output_guardrails(raw_greeting, is_medical=False, show_disclaimer=False)
+            if chat_session:
+                try:
+                    user_msg = Message(session_id=chat_session.id, role="user", content=msg)
+                    bot_msg = Message(session_id=chat_session.id, role="assistant", content=str(answer))
+                    db.session.add_all([user_msg, bot_msg])
+                    chat_session.updated_at = datetime.now(timezone.utc)
+                    db.session.commit()
+                except Exception:
+                    pass
+            return str(answer)
+
+        # 5. Handle ACCOUNT_ACTION turn
+        if route_decision.action == "ACCOUNT_ACTION":
+            ans_account = route_decision.response or "Please use the account controls available in the application."
+            if chat_session:
+                try:
+                    user_msg = Message(session_id=chat_session.id, role="user", content=msg)
+                    bot_msg = Message(session_id=chat_session.id, role="assistant", content=ans_account)
+                    db.session.add_all([user_msg, bot_msg])
+                    chat_session.updated_at = datetime.now(timezone.utc)
+                    db.session.commit()
+                except Exception:
+                    pass
+            return ans_account
+
+        # 6. MEDICAL Turn: Clinical triage, RAG, and Output guardrails
+        if chat_session:
             user_msg = Message(session_id=chat_session.id, role="user", content=msg)
             db.session.add(user_msg)
             db.session.commit()
@@ -283,15 +369,15 @@ def generate_voice_response(msg: str, user=None) -> str:
         history_text = build_history_text(chat_session) if chat_session else ""
         user_memory = get_user_memory(user) if user else "Voice Session"
 
-        # Load persisted patient state from State Store or DB (parity with text path)
-        from services.state_store import get_state_store, check_and_apply_ttl, check_emergency_resolution
-        from services.output_guardrails import ClinicalOutputGuardrail
-        from services.audit_logger import AuditLogger
-        from research.src.clinical_parser import ClinicalEntityParser
-        from routes.chat import is_greeting_text
+        # Trigger decoupled background memory update asynchronously
+        if user and hasattr(user, "id"):
+            enqueue_memory_update(user.id, msg, history_text)
 
-        state_store = get_state_store()
-        patient_state = (state_store.get(str(chat_session.id)) if chat_session else None) or load_patient_state(chat_session)
+        # Trigger decoupled background title update only on first MEDICAL message
+        if chat_session and chat_session.title == "New Consultation":
+            enqueue_title_update(chat_session.id, msg)
+
+        # Apply TTL auto-expiration and check emergency resolution
         if check_and_apply_ttl(patient_state) and chat_session:
             AuditLogger.log_ttl_expired(session_id=str(chat_session.id))
         if check_emergency_resolution(msg, patient_state) and chat_session:
@@ -300,21 +386,6 @@ def generate_voice_response(msg: str, user=None) -> str:
         # Extract per-turn clinical signals
         signals = ClinicalEntityParser.extract_clinical_signals(msg)
         patient_state.transient_symptoms = signals.get("active_symptoms", [])
-
-        # Pure greeting bypass
-        is_pure_greeting = is_greeting_text(msg) and not signals.get("has_clinical_signals", False)
-        if is_pure_greeting:
-            first_name = user.name.split()[0] if user and hasattr(user, "name") and user.name else "there"
-            raw_answer = format_context_aware_greeting(patient_state, first_name=first_name, msg=msg)
-            answer = app.apply_output_guardrails(raw_answer, is_medical=False, show_disclaimer=False)
-            if chat_session:
-                bot_msg = Message(session_id=chat_session.id, role="assistant", content=str(answer))
-                db.session.add(bot_msg)
-                save_patient_state(chat_session, patient_state)
-                state_store.set(str(chat_session.id), patient_state)
-                chat_session.updated_at = datetime.now(timezone.utc)
-                db.session.commit()
-            return str(answer)
 
         prev_snapshot = patient_state.get_diff_snapshot()
         patient_state = extract_patient_state(msg, patient_state)
@@ -386,8 +457,14 @@ def generate_voice_response(msg: str, user=None) -> str:
                 db.session.commit()
             return str(answer)
 
-        logger.info(f"[generate_voice_response] Step 1: Classifying intent...")
-        intent = app.classify_intent(app.classifierModel, msg)
+        # Intent Determination: Derived from route_decision with zero double LLM calls
+        intent = app.classify_intent(
+            app.classifierModel,
+            msg,
+            route_decision=route_decision,
+            recent_turns=recent_turns,
+            patient_state=patient_state
+        )
         logger.info(f"[generate_voice_response] Step 1: Intent = '{intent}'")
 
         # Clinical triage: red-flag overrides & risk tier
@@ -430,10 +507,16 @@ def generate_voice_response(msg: str, user=None) -> str:
             )
 
         elif intent == "medical_query":
-            logger.info(f"[generate_voice_response] Step 2: RAG retrieval from Pinecone (The Gale Encyclopedia)...")
-            docs = app.retriever.invoke(msg)
-            context = "\n\n".join([doc.page_content for doc in docs])
-            logger.info(f"[generate_voice_response] Step 2: Retrieved {len(docs)} docs, invoking chatModel...")
+            logger.info("[generate_voice_response] Step 2: RAG retrieval from Pinecone (The Gale Encyclopedia)...")
+            try:
+                docs = app.retriever.invoke(msg)
+                context = "\n\n".join([doc.page_content for doc in docs])
+            except Exception:
+                context = "Clinical medical reference and Gale Encyclopedia principles."
+            if not context.strip():
+                context = "Clinical medical reference and Gale Encyclopedia principles."
+
+            logger.info(f"[generate_voice_response] Step 2: Invoking chatModel...")
             formatted_prompt = dynamic_prompt.format(context=context, input=msg)
             response_obj = app.chatModel.invoke(formatted_prompt)
             raw_answer = response_obj.content if hasattr(response_obj, "content") else str(response_obj)
