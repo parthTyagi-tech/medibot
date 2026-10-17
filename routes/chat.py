@@ -542,7 +542,7 @@ def handle_chat_turn(msg: str, user=None) -> str:
                     raise ValueError("Empty retrieval response")
             except Exception as rag_err:
                 print(f"[RAG] Retrieval fallback to direct clinical consultation: {rag_err}")
-                direct_prompt = dynamic_prompt.format(context="Clinical medicine reference and Gale Encyclopedia principles.", input=msg)
+                direct_prompt = dynamic_prompt.format(context="No reference material available; answer from general knowledge, do not cite sources.", input=msg)
                 raw_resp = app_module.chatModel.invoke(direct_prompt)
                 raw_answer = raw_resp.content if hasattr(raw_resp, "content") else str(raw_resp)
 
@@ -555,12 +555,14 @@ def handle_chat_turn(msg: str, user=None) -> str:
 
             raw_answer = maybe_append_emergency_reminder(raw_answer, patient_state, msg_count, msg)
 
+            is_no_ref = (not context_docs) or getattr(app_module.retriever, "no_reference_mode", False)
             answer = app_module.apply_output_guardrails(
                 raw_answer,
                 is_medical=True,
                 show_disclaimer=show_disc,
                 patient_state=patient_state,
-                triage_tier=risk_tier
+                triage_tier=risk_tier,
+                no_reference=is_no_ref
             )
             patient_state.disclaimer_shown = True
 

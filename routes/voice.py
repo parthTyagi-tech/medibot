@@ -330,9 +330,9 @@ def voice_chat():
                     docs = retriever.invoke(msg)
                     context = "\n\n".join([doc.page_content for doc in docs])
                 except Exception:
-                    context = "Clinical medical reference and Gale Encyclopedia principles."
+                    context = "No reference material available; answer from general knowledge, do not cite sources."
                 if not context.strip():
-                    context = "Clinical medical reference and Gale Encyclopedia principles."
+                    context = "No reference material available; answer from general knowledge, do not cite sources."
                 formatted_prompt = dynamic_prompt.format(context=context, input=msg)
                 
                 if correction_alert:

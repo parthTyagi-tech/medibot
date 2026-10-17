@@ -1,6 +1,9 @@
 import os
 import logging
 from typing import Any, Dict, List, Optional, Tuple, Union
+from dotenv import load_dotenv
+
+load_dotenv()
 from flask_login import current_user
 from pinecone import Pinecone
 from langchain_core.retrievers import BaseRetriever
@@ -19,7 +22,8 @@ from research.src.guardrails import (
     apply_input_guardrails,
     apply_output_guardrails,
     NON_MEDICAL_REFUSAL,
-    MEDICAL_DISCLAIMER
+    MEDICAL_DISCLAIMER,
+    NO_REFERENCE_DISCLAIMER
 )
 from research.src.clinical_triage import (
     PatientState,
@@ -33,7 +37,7 @@ from research.src.clinical_triage import (
 logger = logging.getLogger("ai-service")
 
 # ─────────────────────────────────────────────────────────────
-# 1. Embeddings & Pinecone Vector Store Setup (The Gale Encyclopedia of Medicine)
+# 1. Embeddings & Pinecone Vector Store Setup
 # ─────────────────────────────────────────────────────────────
 
 embedding = download_embeddings()
@@ -43,45 +47,88 @@ class CustomPineconeRetriever(BaseRetriever):
     index: Any = None
     embeddings: Any = None
     k: int = 4
+    no_reference_mode: bool = False
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.validate_index_startup()
+
+    def validate_index_startup(self):
+        """Startup check: index dimension must match embedding model and total_vector_count > 0."""
+        if not self.index:
+            logger.error("[Retriever] Index not configured. Operating in no-reference mode.")
+            self.no_reference_mode = True
+            return
+
+        expected_dim = getattr(self.embeddings, "dimension", 1024) if self.embeddings else 1024
+        try:
+            stats = self.index.describe_index_stats()
+            actual_dim = getattr(stats, "dimension", None)
+            if actual_dim is None and isinstance(stats, dict):
+                actual_dim = stats.get("dimension")
+
+            total_count = getattr(stats, "total_vector_count", None)
+            if total_count is None and isinstance(stats, dict):
+                total_count = stats.get("total_vector_count", 0)
+            total_count = int(total_count or 0)
+
+            if actual_dim != expected_dim:
+                logger.error(
+                    f"[Retriever] Startup check failed: index dimension is {actual_dim}D, "
+                    f"but embedding model requires {expected_dim}D. Operating in no-reference mode."
+                )
+                self.no_reference_mode = True
+            elif total_count <= 0:
+                logger.error(
+                    f"[Retriever] Startup check failed: index has {total_count} vectors (empty). "
+                    "Operating in no-reference mode."
+                )
+                self.no_reference_mode = True
+            else:
+                logger.info(
+                    f"[Retriever] Startup check passed: dimension={actual_dim}D, total_vector_count={total_count}."
+                )
+                self.no_reference_mode = False
+        except Exception as e:
+            logger.error(f"[Retriever] Index validation error ({type(e).__name__}: {e}). Operating in no-reference mode.")
+            self.no_reference_mode = True
 
     def _get_relevant_documents(self, query: str, *, run_manager=None) -> List[Document]:
+        if self.no_reference_mode or not self.embeddings or not self.index:
+            return []
+
         docs = []
         try:
-            if self.embeddings and self.index:
-                query_vector = self.embeddings.embed_query(query)
-                if query_vector and any(v != 0.0 for v in query_vector[:10]):
-                    results = self.index.query(
-                        vector=query_vector,
-                        top_k=self.k,
-                        include_metadata=True
-                    )
-                    for match in results.get("matches", []):
-                        metadata = match.get("metadata", {})
-                        text = metadata.get("text", "")
-                        if text.strip():
-                            docs.append(Document(page_content=text.strip(), metadata=metadata))
+            query_vector = self.embeddings.embed_query(query)
+            if query_vector and any(v != 0.0 for v in query_vector[:10]):
+                results = self.index.query(
+                    vector=query_vector,
+                    top_k=self.k,
+                    include_metadata=True
+                )
+                for match in results.get("matches", []):
+                    metadata = match.get("metadata", {})
+                    text = metadata.get("text", "")
+                    if text.strip():
+                        docs.append(Document(page_content=text.strip(), metadata=metadata))
         except Exception as e:
-            logger.warning(f"[Retriever] Pinecone lookup note: {e}")
-
-        if not docs:
-            docs.append(Document(
-                page_content=(
-                    f"The Gale Encyclopedia of Medicine Clinical Guide for '{query}':\n"
-                    f"Comprehensive clinical assessment principles: evaluate onset, duration, severity, "
-                    f"associated red-flag symptoms, lifestyle care, and hospital referral criteria."
-                ),
-                metadata={"source": "The Gale Encyclopedia of Medicine"}
-            ))
+            logger.warning(f"[Retriever] Pinecone lookup note ({type(e).__name__}): {e}")
 
         return docs
 
 
 pc_key = os.getenv("PINECONE_API_KEY")
+index_name = os.getenv("PINECONE_INDEX_NAME", "medical-chatbot-e5")
 pinecone_index = None
 if pc_key:
     try:
         pc = Pinecone(api_key=pc_key)
-        pinecone_index = pc.Index("medical-chatbot")
+        existing_indexes = [idx.name for idx in pc.list_indexes()]
+        if index_name in existing_indexes:
+            desc = pc.describe_index(index_name)
+            pinecone_index = pc.Index(index_name, host=desc.host)
+        else:
+            logger.warning(f"[Pinecone] Index '{index_name}' not in {existing_indexes}. Operating in no-reference mode.")
     except Exception as e:
         logger.warning(f"[Pinecone] Index initialization notice: {e}")
 
@@ -195,7 +242,8 @@ def build_system_prompt(
     retrieved_docs: Optional[List[Any]] = None,
     history_text: str = "",
     user_memory: str = "",
-    user: Optional[Any] = None
+    user: Optional[Any] = None,
+    no_reference: Optional[bool] = None
 ) -> str:
     """
     Constructs the core clinical system prompt incorporating:
@@ -356,6 +404,27 @@ def build_system_prompt(
             "- ONCOLOGY RESTRICTION: Because of the cancer/immunosuppression history, explicitly forbid taking any OTC fever reducers or pain medicines without specialist authorization.\n"
         )
 
+    # Determine reference availability
+    if no_reference is not None:
+        is_no_ref = no_reference
+    elif retrieved_docs is not None and len(retrieved_docs) == 0:
+        is_no_ref = True
+    elif retrieved_docs is None and getattr(retriever, "no_reference_mode", False):
+        is_no_ref = True
+    else:
+        is_no_ref = False
+
+    if is_no_ref:
+        reference_block = (
+            "No reference material available; answer from general knowledge, do not cite sources.\n"
+            f"<reference_library>\n{context_block if context_block == '{context}' else 'No reference material available.'}\n</reference_library>\n\n"
+        )
+    else:
+        reference_block = (
+            "Authoritative Clinical References: The Gale Encyclopedia of Medicine, CDC, WHO, and UpToDate-aligned guidelines.\n"
+            f"<reference_library>\n{context_block}\n</reference_library>\n\n"
+        )
+
     system_prompt = (
         f"You are MediAssist, an experienced, empathetic, and highly precise clinical doctor AI.\n"
         f"You communicate with warmth, clarity, and doctor-grade clinical precision. Keep responses strictly concise, focused, and under 150 words.\n\n"
@@ -364,8 +433,7 @@ def build_system_prompt(
         f"Patient Memory: {safe_memory}\n"
         f"Assigned Clinical Risk Tier: {risk_tier}\n\n"
         f"{history_part}"
-        f"Authoritative Clinical References: The Gale Encyclopedia of Medicine, CDC, WHO, and UpToDate-aligned guidelines.\n"
-        f"<reference_library>\n{context_block}\n</reference_library>\n\n"
+        f"{reference_block}"
         f"{core_laws_block}\n"
         f"{negative_constraints_section}"
         f"{four_step_format_block}\n\n"
@@ -383,13 +451,15 @@ def build_prompt(
     history_text: str = "",
     user_memory: str = "",
     user=None,
-    patient_state: Optional[Union[PatientState, Dict[str, Any]]] = None
+    patient_state: Optional[Union[PatientState, Dict[str, Any]]] = None,
+    no_reference: Optional[bool] = None
 ) -> ChatPromptTemplate:
     system_prompt = build_system_prompt(
         patient_state=patient_state,
         history_text=history_text,
         user_memory=user_memory,
-        user=user
+        user=user,
+        no_reference=no_reference
     )
     return ChatPromptTemplate.from_messages([
         ("system", system_prompt),

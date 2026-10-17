@@ -1,170 +1,206 @@
-from typing import List
-from langchain.schema import Document
+from typing import List, Optional, Dict, Any
+from langchain_core.documents import Document
 from langchain_community.document_loaders import DirectoryLoader, PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+from pinecone import Pinecone
 import os
-import requests
 import time
 import logging
+import threading
+import concurrent.futures
 
 logger = logging.getLogger("embeddings")
 
 # ─────────────────────────────────────────────────────────────
-# Primary: Real semantic embeddings via Hugging Face Inference API
+# Primary: Real semantic embeddings via Pinecone Hosted Inference
 # ─────────────────────────────────────────────────────────────
 
-_HF_API_URL = (
-    "https://router.huggingface.co/hf-inference/models/"
-    "sentence-transformers/all-MiniLM-L6-v2/pipeline/feature-extraction"
-)
-_DIMENSIONS = 384
-_MAX_RETRIES = 3
+def _is_retryable_error(exc: Exception) -> bool:
+    """Retry only on timeout or 5xx, never on 4xx, 429, or quota exhaustion."""
+    if isinstance(exc, (concurrent.futures.TimeoutError, TimeoutError)):
+        return True
+
+    status_code = getattr(exc, "status", None) or getattr(exc, "status_code", None)
+    if status_code is not None:
+        try:
+            code = int(status_code)
+            if code >= 500:
+                return True
+            if 400 <= code < 500:
+                return False
+        except (ValueError, TypeError):
+            pass
+
+    err_str = str(exc).lower()
+    if any(q in err_str for q in ["429", "quota", "rate limit", "unauthorized", "forbidden", "401", "403", "404", "bad request", "400"]):
+        return False
+    if any(s in err_str for s in ["500", "502", "503", "504", "server error", "timeout", "timed out", "deadline"]):
+        return True
+
+    return False
 
 
-class HuggingFaceAPIEmbeddings:
+class PineconeHostedEmbeddings:
     """
-    Semantic embedding generator using Hugging Face's Serverless Inference API
-    for sentence-transformers/all-MiniLM-L6-v2 (384-dim, cosine similarity).
+    Semantic embedding generator using Pinecone's Hosted Inference API
+    (multilingual-e5-large, 1024-dim, cosine similarity).
 
     Features:
-    - Zero local RAM: model runs entirely on HF's cloud GPUs (<50MB host RAM).
-    - LRU cache (128 items) for instant deduplication.
-    - Exponential backoff retry (3 attempts) for network resilience.
-    - Deterministic output dimensions matching Pinecone index configuration.
+    - Zero local RAM: model runs entirely on Pinecone's cloud (<10MB host RAM).
+    - Dynamic dimension probe from model inference.
+    - Thread-safe LRU query cache (128 items) that never caches None.
+    - Hard 3s timeout on inference calls via ThreadPoolExecutor.
+    - Resilient retry policy: retries once only on timeout/5xx, never on 4xx/429/quota.
+    - Circuit breaker: 3 consecutive failures open breaker for 60s.
     """
 
-    def __init__(self, token: str):
-        self._token = token
-        self._headers = {
-            "Authorization": f"Bearer {token}",
-            "X-Wait-For-Model": "true",
-            "Content-Type": "application/json",
-        }
-        self._cache = {}
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        model: Optional[str] = None,
+        timeout: float = 3.0
+    ):
+        self.api_key = api_key or os.getenv("PINECONE_API_KEY") or "dummy-offline-key"
+        self.model = model or os.getenv("EMBED_MODEL", "multilingual-e5-large")
+        self.timeout = timeout
+        self.pc = Pinecone(api_key=self.api_key)
 
-    def _call_api(self, texts: List[str]) -> List[List[float]]:
-        """Call HF Inference API with exponential backoff retry."""
-        last_err = None
-        for attempt in range(_MAX_RETRIES):
-            try:
-                resp = requests.post(
-                    _HF_API_URL,
-                    headers=self._headers,
-                    json={"inputs": texts, "options": {"wait_for_model": True}},
-                    timeout=30,
+        self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
+        self._cache: Dict[str, List[float]] = {}
+        self._cache_lock = threading.Lock()
+
+        self._consecutive_failures = 0
+        self._breaker_open_until = 0.0
+        self._breaker_lock = threading.Lock()
+
+        # Dynamic dimension probe (Amendment 8)
+        self.dimension = 1024
+        try:
+            probe = self._call_embed(["probe"], input_type="query")
+            if probe and len(probe) > 0 and len(probe[0]) > 0:
+                self.dimension = len(probe[0])
+                logger.info(f"[Pinecone-Embed] Probed dimension for '{self.model}': {self.dimension}D")
+        except Exception as e:
+            logger.warning(f"[Pinecone-Embed] Probe dimension check notice: {e}. Using fallback {self.dimension}D")
+
+    def _raw_inference(self, texts: List[str], input_type: str) -> Any:
+        return self.pc.inference.embed(
+            model=self.model,
+            inputs=texts,
+            parameters={"input_type": input_type, "truncate": "END"}
+        )
+
+    def _call_embed_once(self, texts: List[str], input_type: str) -> List[List[float]]:
+        future = self._executor.submit(self._raw_inference, texts, input_type)
+        res = future.result(timeout=self.timeout)
+        embeddings = []
+        if hasattr(res, "data"):
+            for item in res.data:
+                if hasattr(item, "values"):
+                    embeddings.append(item.values)
+                elif isinstance(item, dict) and "values" in item:
+                    embeddings.append(item["values"])
+                elif isinstance(item, list):
+                    embeddings.append(item)
+        elif isinstance(res, list):
+            embeddings = res
+        return embeddings
+
+    def _call_embed(self, texts: List[str], input_type: str = "query") -> Optional[List[List[float]]]:
+        # Circuit breaker check
+        now = time.time()
+        with self._breaker_lock:
+            if now < self._breaker_open_until:
+                logger.warning(
+                    f"[Pinecone-Embed] Circuit breaker is OPEN (cooldown until {self._breaker_open_until:.1f}). Skipping embedding."
                 )
-                resp.raise_for_status()
-                data = resp.json()
+                return None
 
-                # API returns List[List[float]] for multiple inputs
-                # or List[float] for a single input
-                if data and isinstance(data[0], float):
-                    data = [data]
-
-                # Validate dimensions
-                for vec in data:
-                    if len(vec) != _DIMENSIONS:
-                        raise ValueError(
-                            f"Expected {_DIMENSIONS}D vector, got {len(vec)}D"
-                        )
-                return data
-
+        last_exc = None
+        for attempt in range(2):
+            try:
+                embeddings = self._call_embed_once(texts, input_type)
+                with self._breaker_lock:
+                    self._consecutive_failures = 0
+                    self._breaker_open_until = 0.0
+                return embeddings
             except Exception as e:
-                last_err = e
-                if attempt < _MAX_RETRIES - 1:
-                    wait = 2 ** attempt  # 1s, 2s
+                last_exc = e
+                if attempt == 0 and _is_retryable_error(e):
                     logger.warning(
-                        f"[HF-Embed] Attempt {attempt + 1}/{_MAX_RETRIES} failed: {e}. "
-                        f"Retrying in {wait}s..."
+                        f"[Pinecone-Embed] Attempt 1 failed with retryable error ({type(e).__name__}: {e}). Retrying once..."
                     )
-                    time.sleep(wait)
+                    time.sleep(0.5)
+                    continue
+                else:
+                    logger.error(
+                        f"[Pinecone-Embed] Embedding call failed ({type(e).__name__}: {e}). No further retries."
+                    )
+                    break
 
-        logger.error(f"[HF-Embed] All {_MAX_RETRIES} attempts failed: {last_err}")
-        return []
+        with self._breaker_lock:
+            self._consecutive_failures += 1
+            if self._consecutive_failures >= 3:
+                self._breaker_open_until = time.time() + 60.0
+                logger.critical(
+                    f"[Pinecone-Embed] Circuit breaker OPENED for 60s after {self._consecutive_failures} consecutive failures."
+                )
+        return None
 
-    def embed_query(self, text: str) -> List[float]:
-        """Embed a single text query into a 384-dim semantic vector."""
+    def embed_query(self, text: str) -> Optional[List[float]]:
+        """Embed a single query into a semantic vector. Returns None on failure."""
         if not text:
-            return [0.0] * _DIMENSIONS
+            return None
 
-        if text in self._cache:
-            return self._cache[text]
+        with self._cache_lock:
+            if text in self._cache:
+                return self._cache[text]
 
-        result = self._call_api([text])
-        if result:
-            vec = result[0]
-        else:
-            logger.error("[HF-Embed] Failed to generate semantic vector for query.")
-            vec = [0.0] * _DIMENSIONS
+        results = self._call_embed([text], input_type="query")
+        if not results or len(results) == 0:
+            # Crucial: Never cache None
+            return None
 
-        # LRU eviction
-        if len(self._cache) >= 128:
-            self._cache.clear()
-        self._cache[text] = vec
+        vec = results[0]
+        with self._cache_lock:
+            if len(self._cache) >= 128:
+                self._cache.clear()
+            self._cache[text] = vec
         return vec
 
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
-        """Embed a batch of texts. Uncached texts are sent to HF API in one call."""
+        """Embed a batch of document texts (passage mode) in chunks <= 96."""
         if not texts:
             return []
 
-        # Split into cached hits and uncached misses
-        results = [None] * len(texts)
-        uncached_indices = []
-        for i, t in enumerate(texts):
-            if t in self._cache:
-                results[i] = self._cache[t]
+        all_embeddings = []
+        batch_size = 96
+        for i in range(0, len(texts), batch_size):
+            batch = texts[i:i + batch_size]
+            res = self._call_embed(batch, input_type="passage")
+            if res:
+                all_embeddings.extend(res)
             else:
-                uncached_indices.append(i)
-
-        if uncached_indices:
-            uncached_texts = [texts[i] for i in uncached_indices]
-            api_results = self._call_api(uncached_texts)
-
-            if api_results and len(api_results) == len(uncached_texts):
-                for idx, vec in zip(uncached_indices, api_results):
-                    results[idx] = vec
-                    if len(self._cache) >= 128:
-                        self._cache.clear()
-                    self._cache[texts[idx]] = vec
-            else:
-                logger.error("[HF-Embed] Failed to retrieve semantic embeddings for batch.")
-                for idx in uncached_indices:
-                    results[idx] = [0.0] * _DIMENSIONS
-
-        return results
+                raise RuntimeError(f"Embedding failed for passage batch at index {i}")
+        return all_embeddings
 
 
 # Backward compatibility alias
-LocalEmbeddings = HuggingFaceAPIEmbeddings
+HuggingFaceAPIEmbeddings = PineconeHostedEmbeddings
+LocalEmbeddings = PineconeHostedEmbeddings
 
 
 def download_embeddings():
     """
-    Returns HuggingFaceAPIEmbeddings for true semantic embeddings
-    via Hugging Face's Serverless Inference API (all-MiniLM-L6-v2).
-    Requires HF_TOKEN to be set in environment variables.
+    Returns PineconeHostedEmbeddings for hosted inference embeddings (multilingual-e5-large).
+    Requires PINECONE_API_KEY in environment variables.
     """
-    hf_token = os.getenv("HF_TOKEN")
-    if not hf_token:
-        raise ValueError(
-            "HF_TOKEN environment variable is missing. "
-            "Please provide a valid Hugging Face Access Token in .env to generate semantic embeddings."
-        )
-    logger.info("[Embeddings] Using Hugging Face Serverless API (all-MiniLM-L6-v2) for semantic embeddings.")
-    return HuggingFaceAPIEmbeddings(token=hf_token)
-
+    return PineconeHostedEmbeddings()
 
 
 def load_pdf_files(data: str) -> List[Document]:
     """
     Loads all PDF documents from the specified directory path.
-    
-    Args:
-        data (str): Path to directory containing PDF files.
-        
-    Returns:
-        List[Document]: Extracted LangChain Document instances.
     """
     loader = DirectoryLoader(
         path=data,
@@ -176,13 +212,7 @@ def load_pdf_files(data: str) -> List[Document]:
 
 def filter_to_minimal_docs(docs: List[Document]) -> List[Document]:
     """
-    Strips non-essential metadata from documents to conserve vector storage footprint.
-    
-    Args:
-        docs (List[Document]): Raw loaded documents.
-        
-    Returns:
-        List[Document]: Cleaned documents with minimal source metadata.
+    Strips non-essential metadata from documents while preserving source and page.
     """
     minimal_docs = []
 
@@ -191,10 +221,8 @@ def filter_to_minimal_docs(docs: List[Document]) -> List[Document]:
             Document(
                 page_content=doc.page_content,
                 metadata={
-                    "source": doc.metadata.get(
-                        "source",
-                        "unknown"
-                    )
+                    "source": doc.metadata.get("source", "unknown"),
+                    "page": doc.metadata.get("page", 0)
                 }
             )
         )
@@ -204,23 +232,15 @@ def filter_to_minimal_docs(docs: List[Document]) -> List[Document]:
 
 def text_split(
     docs: List[Document],
-    chunk_size: int = 2500,
+    chunk_size: int = 1100,
     chunk_overlap: int = 50
 ) -> List[Document]:
     """
-    Splits documents into clinical context chunks with overlap.
-    
-    Args:
-        docs (List[Document]): Documents to split.
-        chunk_size (int): Character size of each chunk.
-        chunk_overlap (int): Overlap between adjacent chunks.
-        
-    Returns:
-        List[Document]: Chunked document list.
+    Splits documents into clinical context chunks (~1000-1200 characters) with overlap.
     """
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=chunk_size,
         chunk_overlap=chunk_overlap
     )
 
-    return splitter.split_documents(docs)
+    return splitter.split_documents(docs)
