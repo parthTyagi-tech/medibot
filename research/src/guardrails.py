@@ -481,35 +481,17 @@ def suppress_specific_drug_dosing(text: str, patient_state: Optional[Any] = None
     # Check if ANY prohibited drug name appears
     has_prohibited_drug = any(re.search(pat, cleaned, re.IGNORECASE) for pat in UNIVERSALLY_PROHIBITED_DRUGS)
 
-    if has_prohibited_drug:
+    if has_prohibited_drug and is_high_risk:
         dosing_suppressed = True
-        if is_high_risk:
-            # High-risk: Drop entire sentence recommending the drug
-            for drug_pat in UNIVERSALLY_PROHIBITED_DRUGS:
-                if re.search(drug_pat, cleaned, re.IGNORECASE):
-                    cleaned = re.sub(
-                        r"([^.\n]*?" + drug_pat[2:-2] + r"[^.\n]*?\.)",
-                        " Please discuss any medication choices directly with your doctor or pharmacist.",
-                        cleaned,
-                        flags=re.IGNORECASE
-                    )
-        else:
-            # Routine/general: Replace parentheticals or phrases like "(e.g., acetaminophen or ibuprofen)"
-            cleaned = re.sub(
-                r"\(\s*(?:e\.?g\.?,?\s*)?(?:acetaminophen|paracetamol|ibuprofen|advil|tylenol|motrin|aspirin|dolo|aleve|naproxen)(\s*(?:and|or|\/)\s*(?:acetaminophen|paracetamol|ibuprofen|advil|tylenol|motrin|aspirin|dolo|aleve|naproxen))?\s*\)",
-                "",
-                cleaned,
-                flags=re.IGNORECASE
-            )
-            cleaned = re.sub(
-                r"\b(?:such\s+as|like)\s+(?:acetaminophen|paracetamol|ibuprofen|advil|tylenol|motrin|aspirin|dolo|aleve|naproxen)(\s*(?:and|or|\/)\s*(?:acetaminophen|paracetamol|ibuprofen|advil|tylenol|motrin|aspirin|dolo|aleve|naproxen))?\b",
-                "such as an over-the-counter fever reducer",
-                cleaned,
-                flags=re.IGNORECASE
-            )
-            # Replace any standalone drug names with category reference
-            for drug_pat in UNIVERSALLY_PROHIBITED_DRUGS:
-                cleaned = re.sub(drug_pat, "an over-the-counter fever reducer or pain reliever", cleaned, flags=re.IGNORECASE)
+        # High-risk: Drop entire sentence recommending the drug
+        for drug_pat in UNIVERSALLY_PROHIBITED_DRUGS:
+            if re.search(drug_pat, cleaned, re.IGNORECASE):
+                cleaned = re.sub(
+                    r"([^.\n]*?" + drug_pat[2:-2] + r"[^.\n]*?\.)",
+                    " Please discuss any medication choices directly with your doctor or pharmacist.",
+                    cleaned,
+                    flags=re.IGNORECASE
+                )
 
     # Clean up duplicate whitespace
     cleaned = re.sub(r"\s{2,}", " ", cleaned).strip()
