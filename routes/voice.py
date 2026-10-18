@@ -54,7 +54,7 @@ from services.llm_classifier import (
 )
 from research.src.guardrails import apply_output_guardrails, NON_MEDICAL_REFUSAL
 from services.state_store import get_state_store, check_and_apply_ttl, check_emergency_resolution
-from services.output_guardrails import ClinicalOutputGuardrail
+from services.output_guardrails import ClinicalOutputGuardrail, StreamingGuardrailProcessor
 from services.audit_logger import AuditLogger
 from research.src.clinical_parser import ClinicalEntityParser
 from research.src.clinical_triage import ClinicalTriageEngine
@@ -369,14 +369,32 @@ def voice_chat():
                 text = override_guidance
                 if correction_alert:
                     text = f"{correction_alert}\n\n{text}"
-                yield text
-                full_response.append(text)
+                answer = apply_output_guardrails(
+                    text,
+                    is_medical=True,
+                    show_disclaimer=False,
+                    patient_state=patient_state,
+                    triage_tier=risk_tier
+                )
+                sanitized, triggered = ClinicalOutputGuardrail.sanitize_response(answer, patient_state)
+                final_override = str(sanitized)
+                yield final_override
+                full_response.append(final_override)
             elif dosing_blocked:
                 text = dosing_refusal
                 if correction_alert:
                     text = f"{correction_alert}\n\n{text}"
-                yield text
-                full_response.append(text)
+                answer = apply_output_guardrails(
+                    text,
+                    is_medical=True,
+                    show_disclaimer=False,
+                    patient_state=patient_state,
+                    triage_tier=risk_tier
+                )
+                sanitized, triggered = ClinicalOutputGuardrail.sanitize_response(answer, patient_state)
+                final_dosing = str(sanitized)
+                yield final_dosing
+                full_response.append(final_dosing)
             elif intent == "medical_query":
                 try:
                     docs = retriever.invoke(msg)
@@ -391,11 +409,28 @@ def voice_chat():
                     yield correction_alert + "\n\n"
                     full_response.append(correction_alert + "\n\n")
 
-                for chunk in chatModel.stream(formatted_prompt):
-                    text = chunk.content
-                    if text:
-                        yield text
-                        full_response.append(text)
+                processor = StreamingGuardrailProcessor(
+                    patient_state=patient_state,
+                    risk_tier=risk_tier,
+                    is_medical=True
+                )
+                try:
+                    for chunk_text in processor.process_stream(chatModel.stream(formatted_prompt)):
+                        yield chunk_text
+                        full_response.append(chunk_text)
+                except Exception as stream_err:
+                    current_app.logger.error("LLM streaming interrupted: %s", type(stream_err).__name__)
+                    fallback_msg = StreamingGuardrailProcessor.STREAM_INTERRUPTED_FALLBACK
+                    yield fallback_msg
+                    full_response.append(fallback_msg)
+
+                if processor.guardrail_triggered and chat_session:
+                    AuditLogger.log_guardrail_override(
+                        session_id=str(chat_session.id),
+                        condition="VOICE_STREAM_GUARDRAIL",
+                        rule_triggered="; ".join(processor.trigger_reasons) or "STREAM_INTERCEPTION",
+                        raw_tokens_intercepted=", ".join(processor.intercepted_tokens) if processor.intercepted_tokens else None
+                    )
                 patient_state.disclaimer_shown = True
             else:
                 if intent == "memory_recall":
@@ -414,11 +449,28 @@ def voice_chat():
                     prompt_val = None
 
                 if prompt_val:
-                    for chunk in chatModel.stream(prompt_val):
-                        text = chunk.content
-                        if text:
-                            yield text
-                            full_response.append(text)
+                    processor = StreamingGuardrailProcessor(
+                        patient_state=patient_state,
+                        risk_tier=risk_tier,
+                        is_medical=False
+                    )
+                    try:
+                        for chunk_text in processor.process_stream(chatModel.stream(prompt_val)):
+                            yield chunk_text
+                            full_response.append(chunk_text)
+                    except Exception as stream_err:
+                        current_app.logger.error("LLM streaming interrupted: %s", type(stream_err).__name__)
+                        fallback_msg = StreamingGuardrailProcessor.STREAM_INTERRUPTED_FALLBACK
+                        yield fallback_msg
+                        full_response.append(fallback_msg)
+
+                    if processor.guardrail_triggered and chat_session:
+                        AuditLogger.log_guardrail_override(
+                            session_id=str(chat_session.id),
+                            condition="VOICE_STREAM_GUARDRAIL",
+                            rule_triggered="; ".join(processor.trigger_reasons) or "STREAM_INTERCEPTION",
+                            raw_tokens_intercepted=", ".join(processor.intercepted_tokens) if processor.intercepted_tokens else None
+                        )
 
             save_patient_state(chat_session, patient_state)
             if chat_session:
