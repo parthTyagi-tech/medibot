@@ -135,9 +135,10 @@ class AuditLogger:
         rule_triggered: str = "ANTIPYRETIC_CONTRAINDICATION",
         raw_tokens_intercepted: Optional[str] = None,
         client_ip_hash: Optional[str] = None,
-        details: Optional[Dict[str, Any]] = None
+        details: Optional[Dict[str, Any]] = None,
+        condition: Optional[str] = None
     ) -> Dict[str, Any]:
-        reason = condition_or_reason or "GUARDRAIL_TRIGGERED"
+        reason = condition or condition_or_reason or "GUARDRAIL_TRIGGERED"
         d = details or {"reason": reason}
         return cls.log_event(
             session_id=session_id,

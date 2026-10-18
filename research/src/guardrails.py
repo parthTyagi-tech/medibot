@@ -483,12 +483,22 @@ def suppress_specific_drug_dosing(text: str, patient_state: Optional[Any] = None
 
     if has_prohibited_drug and is_high_risk:
         dosing_suppressed = True
-        # High-risk: Drop entire sentence recommending the drug
+        # High-risk: Drop sentence recommending the drug, but PRESERVE explicit prohibitions
         for drug_pat in UNIVERSALLY_PROHIBITED_DRUGS:
             if re.search(drug_pat, cleaned, re.IGNORECASE):
+                def _replace_if_recommending(match):
+                    sentence_text = match.group(0)
+                    if re.search(
+                        r"\b(do\s+not|don\'?t|never|avoid|contraindicated|should\s+not|must\s+not|prohibited)\b",
+                        sentence_text,
+                        re.IGNORECASE
+                    ):
+                        return sentence_text  # Preserve prohibition sentence
+                    return " Please discuss any medication choices directly with your doctor or pharmacist."
+
                 cleaned = re.sub(
                     r"([^.\n]*?" + drug_pat[2:-2] + r"[^.\n]*?\.)",
-                    " Please discuss any medication choices directly with your doctor or pharmacist.",
+                    _replace_if_recommending,
                     cleaned,
                     flags=re.IGNORECASE
                 )

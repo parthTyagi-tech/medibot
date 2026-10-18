@@ -390,13 +390,14 @@ def handle_chat_turn(msg: str, user=None) -> str:
                 patient_state=patient_state,
                 triage_tier="Emergency"
             )
-            answer, guardrail_triggered = ClinicalOutputGuardrail.sanitize_response(answer, patient_state)
-            if guardrail_triggered:
+            sanitized_obj = ClinicalOutputGuardrail.sanitize_response(answer, patient_state)
+            answer = str(sanitized_obj)
+            if sanitized_obj.triggered:
                 AuditLogger.log_guardrail_override(
                     session_id=str(chat_session.id),
                     condition="EMERGENCY_OUTPUT_GUARDRAIL",
-                    rule_triggered=answer.trigger_reason or "GUARDRAIL_INTERCEPTION",
-                    raw_tokens_intercepted=answer.intercepted_tokens
+                    rule_triggered=sanitized_obj.trigger_reason or "GUARDRAIL_INTERCEPTION",
+                    raw_tokens_intercepted=sanitized_obj.intercepted_tokens
                 )
 
             # Audit logging for emergency / caregiver

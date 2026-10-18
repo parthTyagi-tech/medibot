@@ -156,12 +156,23 @@ class ClinicalOutputGuardrail:
                 # Check if it already has an unambiguous prohibition
                 has_prohibition = bool(
                     re.search(
-                        r"\b(do\s+not\s+take|avoid|never\s+take|contraindicated|should\s+not\s+take|must\s+not\s+be\s+taken|prohibited)\b"
+                        r"\b(do\s+not\s+take|don\'?t\s+take|avoid|never\s+take|contraindicated|should\s+not\s+take|must\s+not\s+be\s+taken|prohibited|do\s+not\s+use|don\'?t\s+use)\b"
                         r"[\w\s]{0,45}(" + "|".join(cls.FORBIDDEN_ANTIPYRETICS) + r"|fever\s+reducers?)",
                         lower_text
                     )
                 )
-                has_permissive = any(bool(re.search(pat, lower_text)) for pat in cls.PERMISSIVE_MED_PATTERNS)
+
+                def _is_permissive(line_str: str) -> bool:
+                    l = line_str.lower()
+                    if re.search(
+                        r"\b(do\s+not\s+take|don\'?t\s+take|avoid|never\s+take|contraindicated|should\s+not\s+take|must\s+not\s+be\s+taken|prohibited|do\s+not\s+use|don\'?t\s+use)\b"
+                        r"[\w\s]{0,45}(" + "|".join(cls.FORBIDDEN_ANTIPYRETICS) + r"|fever\s+reducers?)",
+                        l
+                    ):
+                        return False
+                    return any(bool(re.search(pat, l)) for pat in cls.PERMISSIVE_MED_PATTERNS)
+
+                has_permissive = _is_permissive(lower_text)
 
                 if has_permissive or not has_prohibition:
                     triggered = True
@@ -177,13 +188,13 @@ class ClinicalOutputGuardrail:
                     lines = sanitized.split("\n")
                     cleaned_lines = []
                     for line in lines:
-                        if any(re.search(pat, line.lower()) for pat in cls.PERMISSIVE_MED_PATTERNS):
+                        if _is_permissive(line):
                             cleaned_lines.append(f"**{cls.CLINICAL_OVERRIDE_TEXT}**")
                         else:
                             cleaned_lines.append(line)
                     sanitized = "\n".join(cleaned_lines)
 
-                    if cls.CLINICAL_OVERRIDE_TEXT not in sanitized:
+                    if not has_prohibition and cls.CLINICAL_OVERRIDE_TEXT not in sanitized:
                         sanitized += f"\n\n**{cls.CLINICAL_OVERRIDE_TEXT}**"
 
         reason_str = "; ".join(trigger_reasons) if trigger_reasons else None

@@ -314,14 +314,15 @@ def voice_chat():
                     patient_state=patient_state,
                     triage_tier="Emergency"
                 )
-                answer, guardrail_triggered = ClinicalOutputGuardrail.sanitize_response(answer, patient_state)
+                sanitized_obj = ClinicalOutputGuardrail.sanitize_response(answer, patient_state)
+                answer = str(sanitized_obj)
                 if chat_session:
-                    if guardrail_triggered:
+                    if sanitized_obj.triggered:
                         AuditLogger.log_guardrail_override(
                             session_id=str(chat_session.id),
                             condition="EMERGENCY_OUTPUT_GUARDRAIL",
-                            rule_triggered=answer.trigger_reason or "GUARDRAIL_INTERCEPTION",
-                            raw_tokens_intercepted=answer.intercepted_tokens
+                            rule_triggered=sanitized_obj.trigger_reason or "GUARDRAIL_INTERCEPTION",
+                            raw_tokens_intercepted=sanitized_obj.intercepted_tokens
                         )
                     if em_type == "FEBRILE_NEUTROPENIA_CAREGIVER":
                         AuditLogger.log_caregiver_intercept(
