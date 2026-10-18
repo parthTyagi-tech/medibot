@@ -107,7 +107,7 @@ def forgot_password():
 
         msg      = MailMessage(
             subject="MediAssist Password Reset Verification",
-            sender="parthtyagi3389@gmail.com",
+            sender=os.getenv("MAIL_DEFAULT_SENDER") or os.getenv("MAIL_USERNAME") or "noreply@mediassist.ai",
             recipients=[email]
         )
         msg.html = f"""

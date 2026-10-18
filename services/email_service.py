@@ -15,7 +15,10 @@ def send_async_email(app_instance, msg, mail_extension=None):
             brevo_key = os.getenv("BREVO_API_KEY") or os.getenv("SENDINBLUE_API_KEY")
             resend_key = os.getenv("RESEND_API_KEY")
             sendgrid_key = os.getenv("SENDGRID_API_KEY")
-            sender_email = os.getenv("MAIL_USERNAME") or os.getenv("MAIL_DEFAULT_SENDER") or "parthtyagi3389@gmail.com"
+            sender_email = (os.getenv("MAIL_DEFAULT_SENDER") or os.getenv("MAIL_USERNAME") or "").strip().strip('"').strip("'")
+            if not sender_email:
+                app_instance.logger.error("[email_service] No sender email configured (MAIL_DEFAULT_SENDER / MAIL_USERNAME unset). Skipping email dispatch.")
+                return
 
             if brevo_key:
                 app_instance.logger.info("Using Brevo (Sendinblue) HTTP API to send OTP email")
@@ -107,10 +110,12 @@ def send_eval_alert(subject: str, html_content: str, recipient_email: Optional[s
     brevo_key = os.getenv("BREVO_API_KEY") or os.getenv("SENDINBLUE_API_KEY")
     resend_key = os.getenv("RESEND_API_KEY")
     sendgrid_key = os.getenv("SENDGRID_API_KEY")
-    sender_email = os.getenv("MAIL_USERNAME") or os.getenv("MAIL_DEFAULT_SENDER") or "parthtyagi3389@gmail.com"
-    target_email = recipient_email or os.getenv("EVAL_ALERT_EMAIL") or sender_email
-
     log = app_instance.logger if app_instance and hasattr(app_instance, "logger") else logger
+    sender_email = (os.getenv("MAIL_DEFAULT_SENDER") or os.getenv("MAIL_USERNAME") or "").strip().strip('"').strip("'")
+    if not sender_email:
+        log.error("[email_service] No sender email configured (MAIL_DEFAULT_SENDER / MAIL_USERNAME unset). Skipping alert dispatch.")
+        return False
+    target_email = recipient_email or os.getenv("EVAL_ALERT_EMAIL") or sender_email
 
     try:
         if brevo_key:
