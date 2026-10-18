@@ -1,4 +1,5 @@
 import os
+import re
 import secrets
 import threading
 import traceback
@@ -30,6 +31,8 @@ from werkzeug.security import (
 from research.src.auth import db, User, ChatSession
 from services.email_service import send_async_email
 from services.chat_service import summarize_session
+
+EMAIL_REGEX = re.compile(r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$")
 
 auth_bp = Blueprint("auth", __name__)
 
@@ -63,9 +66,12 @@ def login():
 @auth_bp.route("/signup", methods=["GET", "POST"], endpoint="signup")
 def signup():
     if request.method == "POST":
-        email    = request.form["email"]
-        password = request.form["password"]
-        confirm_password = request.form.get("confirm_password")
+        email = request.form.get("email", "").strip().lower()
+        password = request.form.get("password", "")
+        confirm_password = request.form.get("confirm_password", "")
+
+        if not email or not EMAIL_REGEX.match(email):
+            return render_template("signup.html", error="Please provide a valid email address.")
 
         if password != confirm_password:
             return render_template("signup.html", error="Passwords do not match.")
@@ -74,7 +80,10 @@ def signup():
             return render_template("signup.html", error="Password must be at least 8 characters long.")
 
         if User.query.filter_by(email=email).first():
-            return render_template("signup.html", error="Email already exists")
+            return render_template(
+                "signup.html",
+                error="Unable to complete registration with that email address. Please verify your details or sign in."
+            )
 
         user = User(
             email=email,
@@ -92,44 +101,44 @@ def signup():
 @auth_bp.route("/forgot-password", methods=["GET", "POST"], endpoint="forgot_password")
 def forgot_password():
     if request.method == "POST":
-        email = request.form["email"].strip().lower()
-        user  = User.query.filter_by(email=email).first()
-
-        if not user:
+        email = request.form.get("email", "").strip().lower()
+        if not email or not EMAIL_REGEX.match(email):
             return render_template(
                 "forgot_password.html",
-                error="No MediAssist account exists for that email.",
+                error="Please enter a valid email address.",
                 email=email,
             )
 
-        otp = f"{secrets.randbelow(900000) + 100000}"
-        user.reset_otp  = otp
-        user.otp_expiry = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(minutes=10)
-        db.session.commit()
+        user = User.query.filter_by(email=email).first()
+        if user:
+            otp = f"{secrets.randbelow(900000) + 100000}"
+            user.reset_otp  = otp
+            user.otp_expiry = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(minutes=10)
+            db.session.commit()
 
-        msg      = MailMessage(
-            subject="MediAssist Password Reset Verification",
-            sender=os.getenv("MAIL_DEFAULT_SENDER") or os.getenv("MAIL_USERNAME") or "noreply@mediassist.ai",
-            recipients=[email]
-        )
-        msg.html = f"""
-        <div style="font-family: sans-serif; max-width: 500px; margin: 0 auto; color: #333;">
-            <h2 style="color: #2b5a8e;">🩺 MediAssist Password Reset</h2>
-            <p>Hello,</p>
-            <p>We received a request to reset the password associated with your MediAssist account.</p>
-            <div style="background-color: #f4f7f6; padding: 15px; text-align: center; font-size: 24px; font-weight: bold; letter-spacing: 2px; border-radius: 8px; margin: 20px 0;">
-                {otp}
+            msg = MailMessage(
+                subject="MediAssist Password Reset Verification",
+                sender=os.getenv("MAIL_DEFAULT_SENDER") or os.getenv("MAIL_USERNAME") or "noreply@mediassist.ai",
+                recipients=[email]
+            )
+            msg.html = f"""
+            <div style="font-family: sans-serif; max-width: 500px; margin: 0 auto; color: #333;">
+                <h2 style="color: #2b5a8e;">🩺 MediAssist Password Reset</h2>
+                <p>Hello,</p>
+                <p>We received a request to reset the password associated with your MediAssist account.</p>
+                <div style="background-color: #f4f7f6; padding: 15px; text-align: center; font-size: 24px; font-weight: bold; letter-spacing: 2px; border-radius: 8px; margin: 20px 0;">
+                    {otp}
+                </div>
+                <p>This code will expire in 10 minutes.</p>
+                <p style="font-size: 12px; color: #777;">If you did not request this reset, simply ignore this email.</p>
+                <p>Best Regards,<br>MediAssist Team</p>
             </div>
-            <p>This code will expire in 10 minutes.</p>
-            <p style="font-size: 12px; color: #777;">If you did not request this reset, simply ignore this email.</p>
-            <p>Best Regards,<br>MediAssist Team</p>
-        </div>
-        """
+            """
 
-        app_obj = current_app._get_current_object()
-        from app import mail
-        threading.Thread(target=send_async_email, args=(app_obj, msg, mail), daemon=True).start()
-        
+            app_obj = current_app._get_current_object()
+            from app import mail
+            threading.Thread(target=send_async_email, args=(app_obj, msg, mail), daemon=True).start()
+
         session["reset_email"] = email
         session["reset_otp_verified"] = False
         return redirect(url_for("auth.verify_otp", email=email))
@@ -144,17 +153,15 @@ def forgot_password():
 def verify_otp(email):
     email = email.strip().lower()
     user = User.query.filter_by(email=email).first()
-    if not user:
-        return redirect(url_for("auth.forgot_password"))
 
     if request.method == "POST":
-        otp = request.form["otp"].strip()
+        otp = request.form.get("otp", "").strip()
 
-        if not user.reset_otp or not user.otp_expiry:
+        if not user or not user.reset_otp or not user.otp_expiry:
             return render_template(
                 "verify_otp.html",
                 email=email,
-                error="No active OTP found. Please request a new code.",
+                error="Invalid OTP or code expired. Please request a new code.",
             )
 
         if user.otp_expiry <= datetime.now(timezone.utc).replace(tzinfo=None):
