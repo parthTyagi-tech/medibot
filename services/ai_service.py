@@ -21,6 +21,7 @@ from research.src.guardrails import (
     check_content_safety,
     apply_input_guardrails,
     apply_output_guardrails,
+    apply_sentence_guardrails,
     NON_MEDICAL_REFUSAL,
     MEDICAL_DISCLAIMER,
     NO_REFERENCE_DISCLAIMER

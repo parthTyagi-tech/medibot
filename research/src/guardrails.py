@@ -517,6 +517,56 @@ def requires_fixed_emergency_response(patient_state: Optional[Any], triage_tier:
     return None
 
 
+def normalize_unicode_punctuation(text: str) -> str:
+    """Normalizes unicode hyphens, spaces, and quotes to standard ASCII equivalents."""
+    return (
+        text.replace("\u2011", "-")
+        .replace("\u2013", "-")
+        .replace("\u2014", "-")
+        .replace("\u2018", "'")
+        .replace("\u2019", "'")
+        .replace("\u201c", '"')
+        .replace("\u201d", '"')
+        .replace("\u202f", " ")
+        .replace("\u00a0", " ")
+        .replace("\u2248", "~")
+    )
+
+
+def apply_sentence_guardrails(
+    text: str,
+    patient_state: Optional[Any] = None
+) -> Tuple[str, Dict[str, bool]]:
+    """
+    Pure text transforms safe to run on an individual sentence during streaming:
+    1. Strip prompt tags / thinking blocks / scratchpads
+    2. Enforce non-diagnostic decision-support wording
+    3. Grounding specialty hallucination suppression
+    4. Dosing and drug-identity suppression
+    5. Unicode punctuation normalization
+    Returns: (cleaned_sentence, flags_dict)
+    """
+    if not text:
+        return "", {"hallucinated_specialty": False, "dosing_detected": False}
+
+    cleaned = re.sub(r"<\s*/?\s*(system_prompt|user_query|context|memory)\s*>", "", text)
+    cleaned = re.sub(r"<think>[\s\S]*?</think>", "", cleaned)
+    if cleaned.startswith("*   User says:") or cleaned.startswith("* User says:"):
+        option_match = re.search(r"\*Option \d+.*?\*:\s*(.*)", cleaned)
+        if option_match:
+            cleaned = option_match.group(1).strip()
+        else:
+            lines = [l for l in cleaned.split("\n") if not l.strip().startswith("*")]
+            cleaned = "\n".join(lines).strip() or cleaned
+
+    cleaned = enforce_decision_support_language(cleaned)
+    cleaned, flag_hallucinated = suppress_hallucinated_specialties(cleaned, patient_state)
+    cleaned, flag_dosing = suppress_specific_drug_dosing(cleaned, patient_state)
+    cleaned = normalize_unicode_punctuation(cleaned)
+
+    return cleaned, {"hallucinated_specialty": flag_hallucinated, "dosing_detected": flag_dosing}
+
+
 def apply_output_guardrails(
     response_text: str,
     is_medical: bool = False,
@@ -532,29 +582,9 @@ def apply_output_guardrails(
     if not response_text:
         return "I am ready to assist with your medical questions."
 
-    # Strip any leaked prompt tags if any
-    cleaned = re.sub(r"<\s*/?\s*(system_prompt|user_query|context|memory)\s*>", "", response_text)
-    
-    # Strip any raw thinking blocks if model outputted them
-    cleaned = re.sub(r"<think>[\s\S]*?</think>", "", cleaned)
-    
-    # Strip any reasoning scratchpad lines like '* User says:' if leaked
-    if cleaned.startswith("*   User says:") or cleaned.startswith("* User says:"):
-        option_match = re.search(r"\*Option \d+.*?\*:\s*(.*)", cleaned)
-        if option_match:
-            cleaned = option_match.group(1).strip()
-        else:
-            lines = [l for l in cleaned.split("\n") if not l.strip().startswith("*")]
-            cleaned = "\n".join(lines).strip() or cleaned
-
-    # Enforce non-diagnostic decision-support wording
-    cleaned = enforce_decision_support_language(cleaned)
-
-    # Run Grounding Validation (Neutralize unstated oncology/asthma references)
-    cleaned, flag_hallucinated = suppress_hallucinated_specialties(cleaned, patient_state)
-
-    # Run Dosing & Drug-Identity Suppression
-    cleaned, flag_dosing = suppress_specific_drug_dosing(cleaned, patient_state)
+    cleaned, flags = apply_sentence_guardrails(response_text, patient_state)
+    flag_hallucinated = flags["hallucinated_specialty"]
+    flag_dosing = flags["dosing_detected"]
 
     # Fail-Closed Circuit Breaker on Emergency Tier
     circuit_breaker_resp = requires_fixed_emergency_response(
@@ -564,20 +594,6 @@ def apply_output_guardrails(
     )
     if circuit_breaker_resp:
         return circuit_breaker_resp
-
-    # Normalize unicode hyphens, spaces, and quotes to standard characters
-    cleaned = (
-        cleaned.replace("\u2011", "-")
-        .replace("\u2013", "-")
-        .replace("\u2014", "-")
-        .replace("\u2018", "'")
-        .replace("\u2019", "'")
-        .replace("\u201c", '"')
-        .replace("\u201d", '"')
-        .replace("\u202f", " ")
-        .replace("\u00a0", " ")
-        .replace("\u2248", "~")
-    )
 
     if no_reference:
         # Amendment 7: never claim output is based on Gale Encyclopedia/CDC/WHO in no-reference mode
