@@ -80,7 +80,13 @@ def get_redis_connection():
         logger.error("'redis' python package is not installed. Worker cannot start.")
         sys.exit(1)
     try:
-        client = redis.Redis.from_url(REDIS_URL, decode_responses=True)
+        client = redis.Redis.from_url(
+            REDIS_URL,
+            decode_responses=True,
+            socket_timeout=5.0,
+            socket_connect_timeout=5.0,
+            retry_on_timeout=False
+        )
         client.ping()
         return client
     except Exception as exc:

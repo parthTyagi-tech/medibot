@@ -13,6 +13,8 @@ import time
 import hashlib
 import logging
 from typing import Optional, Dict, Any
+from dotenv import load_dotenv
+load_dotenv()
 
 try:
     import redis
@@ -39,7 +41,8 @@ def get_redis_client() -> Optional[Any]:
     if _redis_client is not None:
         return _redis_client
 
-    if not REDIS_URL:
+    redis_url = os.getenv("REDIS_URL", REDIS_URL).strip()
+    if not redis_url:
         _redis_available = False
         return None
 
@@ -49,14 +52,20 @@ def get_redis_client() -> Optional[Any]:
         return None
 
     try:
-        client = redis.Redis.from_url(REDIS_URL, decode_responses=True)
+        client = redis.Redis.from_url(
+            redis_url,
+            decode_responses=True,
+            socket_timeout=3.0,
+            socket_connect_timeout=3.0,
+            retry_on_timeout=False
+        )
         # Verify connection with a short timeout ping
         client.ping()
         _redis_client = client
         _redis_available = True
         return _redis_client
     except Exception as exc:
-        logger.warning(f"[TaskDispatcher] Could not connect to Redis at {REDIS_URL}: {exc}")
+        logger.warning(f"[TaskDispatcher] Could not connect to Redis at {redis_url}: {exc}")
         _redis_available = False
         return None
 

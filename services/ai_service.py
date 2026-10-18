@@ -227,8 +227,8 @@ chatModel = GroqChatModel(
 )
 
 classifierModel = GroqChatModel(
-    primary_model_name="groq/compound-mini",
-    fallback_model_name="openai/gpt-oss-20b",
+    primary_model_name="openai/gpt-oss-20b",
+    fallback_model_name="openai/gpt-oss-120b",
     temperature=0.1,
     max_tokens=512
 )

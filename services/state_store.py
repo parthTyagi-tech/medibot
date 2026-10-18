@@ -184,7 +184,13 @@ class RedisStateStore(BaseStateStore):
 
         try:
             import redis
-            self._client = redis.Redis.from_url(redis_url, decode_responses=True)
+            self._client = redis.Redis.from_url(
+                redis_url,
+                decode_responses=True,
+                socket_timeout=3.0,
+                socket_connect_timeout=3.0,
+                retry_on_timeout=False
+            )
             self._client.ping()
             logger.info(f"[RedisStateStore] Successfully connected to Redis at {redis_url}")
         except Exception as e:
