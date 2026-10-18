@@ -1,5 +1,7 @@
 import os
 import time
+import hmac
+import hashlib
 import threading
 import traceback
 from datetime import datetime, timezone
@@ -71,9 +73,59 @@ def _normalize_livekit_url(url: str) -> str:
     return url
 
 
+def verify_voice_hmac(req) -> tuple[bool, str]:
+    """
+    Verifies that the incoming request to /voice_chat was signed by voice_worker
+    using the shared secret VOICE_INTERNAL_SECRET.
+    Validates timestamp freshness (<=60s) and bounds clock skew (<=5s).
+    Compares raw bytes with hmac.compare_digest and fails closed in production.
+    """
+    secret = os.getenv("VOICE_INTERNAL_SECRET")
+    is_dev = os.getenv("FLASK_ENV", "").strip().lower() == "development"
+    if not secret:
+        if is_dev:
+            secret = "dev-voice-internal-secret-for-local-testing"
+        else:
+            return False, "VOICE_INTERNAL_SECRET unset in non-development mode"
+
+    ts_str = req.headers.get("X-Voice-Timestamp")
+    sig = req.headers.get("X-Voice-Signature")
+    if not ts_str or not sig:
+        return False, "Missing HMAC signature or timestamp headers"
+
+    try:
+        ts = float(ts_str)
+        now = time.time()
+        if (now - ts) > 60 or (ts - now) > 5:
+            return False, "Signature timestamp expired or invalid clock skew"
+    except (ValueError, TypeError):
+        return False, "Invalid timestamp format"
+
+    try:
+        raw_body = req.get_data()
+        data = req.get_json(silent=True) or {}
+        user_id = data.get("user_id")
+        user_id_str = str(user_id) if user_id is not None else ""
+        canonical = f"{ts_str}:{req.path}:{user_id_str}:".encode("utf-8") + raw_body
+        expected = hmac.new(secret.encode("utf-8"), canonical, hashlib.sha256).hexdigest()
+
+        # Compare signatures as bytes; catch any TypeError/ValueError and return 401
+        if not hmac.compare_digest(sig.strip().encode("utf-8"), expected.encode("utf-8")):
+            return False, "Signature mismatch"
+    except Exception as e:
+        return False, f"Signature verification error: {type(e).__name__}"
+
+    return True, "Valid"
+
+
 @voice_bp.route("/voice_chat", methods=["POST"], endpoint="voice_chat")
 def voice_chat():
-    """Called by voice_worker.py — no login required (internal agent process)."""
+    """Called by voice_worker.py — protected via HMAC request signing."""
+    is_valid, reason = verify_voice_hmac(request)
+    if not is_valid:
+        current_app.logger.warning("[voice_chat] HMAC verification failed: %s", reason)
+        return jsonify({"error": "Unauthorized", "detail": reason}), 401
+
     data = request.get_json(silent=True) or {}
     msg  = data.get("message", "").strip()
     user_id = data.get("user_id")

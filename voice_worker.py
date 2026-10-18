@@ -3,6 +3,9 @@ from __future__ import annotations
 import os
 import sys
 import json
+import time
+import hmac
+import hashlib
 import asyncio
 import logging
 import aiohttp
@@ -62,6 +65,33 @@ def is_prompt_injection(user_input: str) -> bool:
         if phrase in text:
             return True
     return False
+
+
+def _build_signed_voice_request(payload: dict, path: str = "/voice_chat") -> tuple[bytes, dict]:
+    """
+    Serializes JSON body to exact bytes and computes HMAC-SHA256 signature
+    over timestamp, request path, user_id, and body bytes.
+    Sends Content-Type: application/json with raw data bytes.
+    """
+    body_bytes = json.dumps(payload, separators=(',', ':')).encode("utf-8")
+    user_id = payload.get("user_id")
+    user_id_str = str(user_id) if user_id is not None else ""
+    ts = str(int(time.time()))
+
+    secret = os.getenv("VOICE_INTERNAL_SECRET")
+    if not secret and os.getenv("FLASK_ENV", "").strip().lower() == "development":
+        secret = "dev-voice-internal-secret-for-local-testing"
+    secret = secret or ""
+
+    canonical = f"{ts}:{path}:{user_id_str}:".encode("utf-8") + body_bytes
+    signature = hmac.new(secret.encode("utf-8"), canonical, hashlib.sha256).hexdigest()
+
+    headers = {
+        "Content-Type": "application/json",
+        "X-Voice-Timestamp": ts,
+        "X-Voice-Signature": signature,
+    }
+    return body_bytes, headers
 
 # ==============================================================================
 
@@ -231,9 +261,11 @@ class MedicalAgent(Agent):
                     payload = {"message": message}
                     if user_id:
                         payload["user_id"] = user_id
+                    body_bytes, headers = _build_signed_voice_request(payload, path="/voice_chat")
                     async with http.post(
                         f"{url}/voice_chat",
-                        json=payload,
+                        data=body_bytes,
+                        headers=headers,
                         timeout=aiohttp.ClientTimeout(total=30),
                     ) as resp:
                         if resp.status != 200:
@@ -267,9 +299,11 @@ class MedicalAgent(Agent):
                     payload = {"message": message, "stream": True}
                     if user_id:
                         payload["user_id"] = user_id
+                    body_bytes, headers = _build_signed_voice_request(payload, path="/voice_chat")
                     async with http.post(
                         f"{url}/voice_chat",
-                        json=payload,
+                        data=body_bytes,
+                        headers=headers,
                         timeout=aiohttp.ClientTimeout(total=30),
                     ) as resp:
                         if resp.status != 200:
