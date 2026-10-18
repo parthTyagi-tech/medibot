@@ -141,8 +141,8 @@ def voice_chat():
     if user_id:
         try:
             user = User.query.get(int(user_id))
-        except Exception:
-            pass
+        except Exception as e:
+            current_app.logger.warning("Failed to fetch user by id in voice_chat: %s", type(e).__name__)
 
     if not stream:
         # non-streaming path
@@ -201,8 +201,8 @@ def voice_chat():
                         bot_msg = Message(session_id=chat_session.id, role="assistant", content=route_decision.response)
                         db.session.add_all([user_msg, bot_msg])
                         db.session.commit()
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        current_app.logger.warning("Failed to persist voice emergency message: %s", type(e).__name__)
                 yield route_decision.response or "Medical emergency detected."
                 return
 
@@ -215,8 +215,8 @@ def voice_chat():
                         bot_msg = Message(session_id=chat_session.id, role="assistant", content=ans_refusal)
                         db.session.add_all([user_msg, bot_msg])
                         db.session.commit()
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        current_app.logger.warning("Failed to persist voice non-medical message: %s", type(e).__name__)
                 yield ans_refusal
                 return
 
@@ -233,8 +233,8 @@ def voice_chat():
                         db.session.add_all([user_msg, bot_msg])
                         chat_session.updated_at = datetime.now(timezone.utc)
                         db.session.commit()
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        current_app.logger.warning("Failed to persist voice greeting message: %s", type(e).__name__)
                 yield str(answer)
                 return
 
@@ -248,8 +248,8 @@ def voice_chat():
                         db.session.add_all([user_msg, bot_msg])
                         chat_session.updated_at = datetime.now(timezone.utc)
                         db.session.commit()
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        current_app.logger.warning("Failed to persist voice account action message: %s", type(e).__name__)
                 yield ans_account
                 return
 

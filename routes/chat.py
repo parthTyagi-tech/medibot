@@ -15,6 +15,10 @@ from flask import (
 )
 from flask_login import login_required, current_user
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 chat_bp = Blueprint("chat", __name__)
 
 GREETING_PATTERNS = [
@@ -89,15 +93,15 @@ def health():
         from sqlalchemy import text
         db.session.execute(text("SELECT 1"))
     except Exception as e:
-        logger.warning(f"Database health check failed: {e}")
+        logger.warning("Database health check failed: %s", type(e).__name__)
         try:
             from research.src.auth import db
             db.session.rollback()
-        except Exception:
-            pass
+        except Exception as rollback_err:
+            logger.warning("Database rollback failed: %s", type(rollback_err).__name__)
         return jsonify({
             "status": "degraded",
-            "database": f"error: {str(e)}",
+            "database": f"error: {type(e).__name__}",
             "service": "MediAssist AI",
             "timestamp": datetime.now(timezone.utc).isoformat()
         }), 503
@@ -118,7 +122,7 @@ def index():
             user_id=current_user.id
         ).order_by(ChatSession.updated_at.desc()).limit(10).all()
     except Exception as e:
-        logger.error(f"Error fetching past_sessions on index route: {e}")
+        logger.error("Error fetching past_sessions on index route: %s", type(e).__name__)
         db.session.rollback()
         past_sessions = []
 
@@ -203,12 +207,13 @@ def handle_chat_turn(msg: str, user=None) -> str:
             session["patient_state"].setdefault("active_emergency", None)
             session["patient_state"].setdefault("emergency_turn_count", 0)
             session["patient_state"].setdefault("current_symptoms", [])
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("Session patient state initialization failed: %s", type(e).__name__)
 
     try:
         chat_session = get_active_session()
-    except Exception:
+    except Exception as e:
+        logger.warning("Failed to get active chat session: %s", type(e).__name__)
         chat_session = None
 
     # Load or initialize structured patient state (State Store + DB backed)
@@ -225,8 +230,8 @@ def handle_chat_turn(msg: str, user=None) -> str:
                 patient_state.active_emergency = sess_ps.get("active_emergency")
             if sess_ps.get("emergency_turn_count", 0) > patient_state.emergency_turn_count:
                 patient_state.emergency_turn_count = sess_ps["emergency_turn_count"]
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("Sync with session patient state failed: %s", type(e).__name__)
 
     # Extract last 3 recent turns from chat_session messages
     recent_turns = []
@@ -235,7 +240,8 @@ def handle_chat_turn(msg: str, user=None) -> str:
             prior_messages = Message.query.filter_by(session_id=chat_session.id).order_by(Message.id.desc()).limit(3).all()
             for m in reversed(prior_messages):
                 recent_turns.append({"role": m.role, "content": m.content})
-        except Exception:
+        except Exception as e:
+            logger.warning("Failed to fetch prior messages: %s", type(e).__name__)
             recent_turns = []
 
     # Run unified route_query (injection -> emergency -> mode check -> classifier -> confidence)
@@ -258,8 +264,8 @@ def handle_chat_turn(msg: str, user=None) -> str:
                 bot_msg = Message(session_id=chat_session.id, role="assistant", content=route_decision.response)
                 db.session.add_all([user_msg, bot_msg])
                 db.session.commit()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("Failed to save emergency message: %s", type(e).__name__)
         return route_decision.response or "Medical emergency detected."
 
     # Handle NON_MEDICAL turn (Amendment 5: No title, memory, summarization, or eval enqueued)
@@ -271,8 +277,8 @@ def handle_chat_turn(msg: str, user=None) -> str:
                 bot_msg = Message(session_id=chat_session.id, role="assistant", content=ans_refusal)
                 db.session.add_all([user_msg, bot_msg])
                 db.session.commit()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("Failed to save non-medical message: %s", type(e).__name__)
         return ans_refusal
 
     # Handle GREETING turn (Amendment 5: No RAG, no triage, no patient_state mutation, no disclaimer consumed)
@@ -288,8 +294,8 @@ def handle_chat_turn(msg: str, user=None) -> str:
                 db.session.add_all([user_msg, bot_msg])
                 chat_session.updated_at = datetime.now(timezone.utc)
                 db.session.commit()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("Failed to save greeting message: %s", type(e).__name__)
         return str(answer)
 
     # Handle ACCOUNT_ACTION turn
@@ -301,8 +307,8 @@ def handle_chat_turn(msg: str, user=None) -> str:
                 bot_msg = Message(session_id=chat_session.id, role="assistant", content=ans_account)
                 db.session.add_all([user_msg, bot_msg])
                 db.session.commit()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("Failed to save account action message: %s", type(e).__name__)
         return ans_account
 
     # ─────────────────────────────────────────────────────────────
@@ -347,8 +353,8 @@ def handle_chat_turn(msg: str, user=None) -> str:
         triage_eval = ClinicalTriageEngine.evaluate(msg, patient_state, signals)
         try:
             session["patient_state"] = patient_state.to_dict()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Failed to serialize patient state to session: %s", type(e).__name__)
 
         if triage_eval and triage_eval.get("tier") == "RESOLVED":
             AuditLogger.log_emergency_resolved(session_id=str(chat_session.id))
@@ -367,8 +373,8 @@ def handle_chat_turn(msg: str, user=None) -> str:
             db.session.commit()
             try:
                 session["patient_state"] = patient_state.to_dict()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("Failed to serialize resolved patient state to session: %s", type(e).__name__)
             return str(answer)
 
         if triage_eval and triage_eval.get("requires_escalation"):
@@ -420,8 +426,8 @@ def handle_chat_turn(msg: str, user=None) -> str:
                     response=str(answer),
                     patient_state=patient_state.to_dict()
                 )
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("Failed to enqueue eval safety check: %s", type(e).__name__)
             return str(answer)
 
         # Intent Determination in Medical/Conversation path (derived from route_decision with zero double LLM calls)
@@ -447,8 +453,8 @@ def handle_chat_turn(msg: str, user=None) -> str:
         patient_state.red_flags = red_flags
         try:
             session["patient_state"] = patient_state.to_dict()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Failed to serialize triage patient state to session: %s", type(e).__name__)
 
         retrieved_chunks = []
 
@@ -608,8 +614,8 @@ def handle_chat_turn(msg: str, user=None) -> str:
         state_store.set(str(chat_session.id), patient_state)
         try:
             session["patient_state"] = patient_state.to_dict()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Failed to serialize final patient state to session: %s", type(e).__name__)
         chat_session.updated_at = datetime.now(timezone.utc)
         db.session.commit()
 

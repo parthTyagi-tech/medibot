@@ -1,6 +1,7 @@
 import os
 import re
 import secrets
+import logging
 import threading
 import traceback
 from datetime import datetime, timezone, timedelta
@@ -34,6 +35,8 @@ from services.chat_service import summarize_session
 
 EMAIL_REGEX = re.compile(r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$")
 
+logger = logging.getLogger(__name__)
+
 auth_bp = Blueprint("auth", __name__)
 
 
@@ -52,7 +55,7 @@ def login():
                 return redirect(url_for("chat.index"))
             return render_template("login.html", error="Invalid email or password")
         except Exception as e:
-            logger.error(f"Login database error: {e}")
+            logger.error("Login database error: %s", type(e).__name__)
             db.session.rollback()
             return render_template("login.html", error="Temporary database connection error. Please try again in a few seconds."), 500
 
