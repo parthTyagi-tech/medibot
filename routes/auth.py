@@ -1,3 +1,4 @@
+import os
 import secrets
 import threading
 import traceback
@@ -10,7 +11,8 @@ from flask import (
     redirect,
     url_for,
     session,
-    current_app
+    current_app,
+    abort
 )
 from flask_mail import Message as MailMessage
 from flask_dance.contrib.google import google
@@ -277,5 +279,7 @@ def logout():
 
 @auth_bp.route("/debug_oauth", endpoint="debug_oauth")
 def debug_oauth():
+    if os.getenv("FLASK_ENV", "").strip().lower() != "development" and not current_app.config.get("DEBUG"):
+        abort(404)
     uri = url_for("google.authorized", _external=True)
     return f"Flask-Dance is using this redirect URI: <b>{uri}</b>"

@@ -53,7 +53,16 @@ mail = Mail(app)
 
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 
-app.secret_key = os.getenv("SECRET_KEY", "fallback-secret")
+secret_key = os.getenv("SECRET_KEY")
+if not secret_key:
+    if os.getenv("FLASK_ENV", "").strip().lower() == "development":
+        secret_key = "dev-insecure-secret-key-do-not-use-in-production"
+    else:
+        raise RuntimeError(
+            "CRITICAL SECURITY CONFIGURATION ERROR: SECRET_KEY environment variable is not set. "
+            "A cryptographically strong SECRET_KEY is required in production."
+        )
+app.secret_key = secret_key
 
 if os.getenv("SERVER_NAME"):
     app.config["SERVER_NAME"] = os.getenv("SERVER_NAME")
