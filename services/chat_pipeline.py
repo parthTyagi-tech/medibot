@@ -65,17 +65,39 @@ from services.audit_logger import AuditLogger
 logger = logging.getLogger("chat-pipeline")
 
 
-def _get_dep(name: str, default: Any) -> Any:
+def _get_dep(name: str, default: Any, source_module: Optional[str] = None) -> Any:
     """
-    Retrieves dependency by name. If the dependency has been patched or defined
-    on sys.modules['routes.chat'], return that reference to preserve 100% test fixture
-    and monkeypatch compatibility. Otherwise, return the canonical default.
+    Retrieves dependency by name, honoring test mocks/patches across modules.
+    Priority order:
+    1. If routes.chat has an active mock/patch (hasattr _mock_name / assert_called), return it.
+    2. If source_module is specified and that module's attribute has an active mock or differs from default, return it.
+    3. If routes.chat defines the attribute, return it.
+    4. If source_module defines the attribute, return it.
+    5. Return default.
     """
     chat_mod = sys.modules.get("routes.chat")
     if chat_mod is not None:
-        val = getattr(chat_mod, name, None)
-        if val is not None:
-            return val
+        chat_val = getattr(chat_mod, name, None)
+        if chat_val is not None and (hasattr(chat_val, "_mock_name") or hasattr(chat_val, "assert_called")):
+            return chat_val
+
+    if source_module and source_module in sys.modules:
+        src_mod = sys.modules[source_module]
+        src_val = getattr(src_mod, name, None)
+        if src_val is not None and (hasattr(src_val, "_mock_name") or hasattr(src_val, "assert_called") or src_val is not default):
+            return src_val
+
+    if chat_mod is not None:
+        chat_val = getattr(chat_mod, name, None)
+        if chat_val is not None:
+            return chat_val
+
+    if source_module and source_module in sys.modules:
+        src_mod = sys.modules[source_module]
+        src_val = getattr(src_mod, name, None)
+        if src_val is not None:
+            return src_val
+
     return default
 
 
@@ -177,7 +199,8 @@ def _run_turn_sync(
     except Exception:
         session_dict = None
 
-    route_decision = route_query(
+    route_query_fn = _get_dep("route_query", route_query, "services.routing_service")
+    route_decision = route_query_fn(
         msg=msg,
         session=session_dict,
         patient_state=patient_state,
@@ -217,7 +240,7 @@ def _run_turn_sync(
 
     # 4. GREETING (Amendment 5 & 9: timeout 2.0s on voice, no disclaimer consumed, no title, no memory)
     if route_decision.action == "GREETING":
-        gen_greet_fn = _get_dep("generate_greeting", generate_greeting)
+        gen_greet_fn = _get_dep("generate_greeting", generate_greeting, "services.llm_classifier")
         timeout_val = 2.0 if channel == "voice" else None
         if timeout_val:
             raw_greeting = gen_greet_fn(msg, recent_turns=recent_turns, language=route_decision.language, timeout=timeout_val)
@@ -634,7 +657,8 @@ def _run_turn_stream(
         except Exception:
             session_dict = None
 
-        route_decision = route_query(
+        route_query_fn = _get_dep("route_query", route_query, "services.routing_service")
+        route_decision = route_query_fn(
             msg=msg,
             session=session_dict,
             patient_state=patient_state,
@@ -677,7 +701,7 @@ def _run_turn_stream(
 
         # 4. GREETING
         if route_decision.action == "GREETING":
-            gen_greet_fn = _get_dep("generate_greeting", generate_greeting)
+            gen_greet_fn = _get_dep("generate_greeting", generate_greeting, "services.llm_classifier")
             raw_greeting = gen_greet_fn(msg, recent_turns=recent_turns, language=route_decision.language, timeout=2.0)
             if not _is_greeting_sane(raw_greeting):
                 raw_greeting = get_static_greeting_fallback(route_decision.language)
