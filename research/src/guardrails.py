@@ -8,7 +8,7 @@ Includes:
 """
 
 import re
-from typing import Tuple, Optional, Any, Dict
+from typing import Tuple, Optional, Any, Dict, List
 
 # ─────────────────────────────────────────────────────────────
 # 1. Prompt Injection & Jailbreak Defense
@@ -340,9 +340,113 @@ NO_REFERENCE_DISCLAIMER = (
     "or individualized treatment plans and is not a substitute for evaluation by a qualified healthcare professional.*"
 )
 
-# Common OTC and prescription drug names to suppress for high-risk patients
-# Comprehensive list of specific drug names prohibited from being named directly
-UNIVERSALLY_PROHIBITED_DRUGS = [
+# ─────────────────────────────────────────────────────────────
+# Sentence Boundary & Splitting Primitives
+# ─────────────────────────────────────────────────────────────
+
+ABBREVIATIONS = frozenset({
+    "dr", "mr", "mrs", "ms", "prof", "vs", "eg", "ie", "etc", "approx", "no", "dept", "vol", "fig"
+})
+
+
+def find_sentence_boundary(buffer: str) -> Optional[int]:
+    """
+    Finds the end index of the first completed sentence in buffer,
+    avoiding decimal numbers (10.5 mg) and abbreviations (Dr., vs., e.g.).
+    Returns index to split at (inclusive of delimiter and trailing space), or None.
+    """
+    pattern = re.compile(r"([.!?]+(?:\s+|\n+)|[\n]{2,})")
+    pos = 0
+    while True:
+        match = pattern.search(buffer, pos)
+        if not match:
+            break
+        punct_start = match.start()
+        punct_char = buffer[punct_start]
+
+        if punct_char == ".":
+            # 1. Decimal check: digits immediately before and after
+            if punct_start > 0 and punct_start + 1 < len(buffer):
+                if buffer[punct_start - 1].isdigit() and buffer[punct_start + 1].isdigit():
+                    pos = match.end()
+                    continue
+
+            # 2. Abbreviation check: examine preceding word
+            prefix = buffer[:punct_start]
+            words = re.findall(r"[A-Za-z]+", prefix)
+            if words:
+                last_word = words[-1].lower()
+                if last_word in ABBREVIATIONS:
+                    pos = match.end()
+                    continue
+                # Also check multi-part abbreviations like e.g. or i.e.
+                if len(words) >= 2 and f"{words[-2].lower()}.{words[-1].lower()}" in {"e.g", "i.e"}:
+                    pos = match.end()
+                    continue
+
+        return match.end()
+
+    return None
+
+
+def split_into_sentences(text: str) -> List[str]:
+    """
+    Splits text into sentences using find_sentence_boundary, preserving
+    abbreviations (Dr., e.g., vs.) and decimal numbers (10.5 mg).
+    Trailing non-delimited text is returned as the final sentence segment.
+    """
+    sentences: List[str] = []
+    rem = text
+    while rem:
+        idx = find_sentence_boundary(rem)
+        if idx is not None and idx > 0:
+            sentences.append(rem[:idx])
+            rem = rem[idx:]
+        else:
+            sentences.append(rem)
+            break
+    return sentences
+
+
+def is_pediatric(patient_state: Optional[Any]) -> bool:
+    """
+    Evaluates whether patient is pediatric:
+    - Any age reported in days, weeks, or months counts as pediatric.
+    - Only age with unit 'years' (or unstated) is compared against < 12.
+    - is_infant_under_3mo flag also counts as pediatric.
+    """
+    if not patient_state:
+        return False
+    if isinstance(patient_state, dict):
+        if patient_state.get("is_infant_under_3mo"):
+            return True
+        age = patient_state.get("age")
+        unit = str(patient_state.get("age_unit", "years") or "years").lower().strip()
+    else:
+        if getattr(patient_state, "is_infant_under_3mo", False):
+            return True
+        age = getattr(patient_state, "age", None)
+        unit = str(getattr(patient_state, "age_unit", "years") or "years").lower().strip()
+
+    if age is None:
+        return False
+    try:
+        age_val = float(age)
+    except (ValueError, TypeError):
+        return False
+
+    if any(u in unit for u in ["day", "week", "month"]):
+        return True
+    return age_val < 12.0
+
+
+# ─────────────────────────────────────────────────────────────
+# Drug Lists & Interception Patterns
+# ─────────────────────────────────────────────────────────────
+
+# GREETING_PROHIBITED_DRUGS: Used exclusively by _is_greeting_sane() to ensure
+# conversational greetings do not hallucinate unsolicited medication advice.
+GREETING_PROHIBITED_DRUGS = [
     r"\bdextromethorphan\b",
     r"\bloperamide\b",
     r"\bacetaminophen\b",
@@ -360,7 +464,91 @@ UNIVERSALLY_PROHIBITED_DRUGS = [
     r"\bamoxicillin\b",
     r"\bdolo\b"
 ]
-HIGH_RISK_PROHIBITED_DRUGS = UNIVERSALLY_PROHIBITED_DRUGS
+# Backward-compatibility alias
+UNIVERSALLY_PROHIBITED_DRUGS = GREETING_PROHIBITED_DRUGS
+
+# HIGH_RISK_DRUG_PATTERNS: Drug names and brands restricted for high-risk patients
+# (cancer/immunosuppressed, pregnancy, pediatrics).
+# Stored as a separate list from GREETING_PROHIBITED_DRUGS because high-risk clinical
+# interception has different clinical scope and coverage requirements.
+HIGH_RISK_DRUG_PATTERNS = [
+    r"\bdextromethorphan\b",
+    r"\bloperamide\b",
+    r"\bacetaminophen\b",
+    r"\bparacetamol\b",
+    r"\bibuprofen\b",
+    r"\badvil\b",
+    r"\btylenol\b",
+    r"\bmotrin\b",
+    r"\baspirin\b",
+    r"\bnaproxen\b",
+    r"\baleve\b",
+    r"\bguaifenesin\b",
+    r"\bpseudoephedrine\b",
+    r"\bcodeine\b",
+    r"\bamoxicillin\b",
+    r"\bdolo\b",
+    # Regional brands and NSAID/antipyretic additions (needs pharmacist review)
+    r"\bdiclofenac\b",       # needs pharmacist review
+    r"\bnimesulide\b",       # needs pharmacist review
+    r"\bmefenamic\s+acid\b", # needs pharmacist review
+    r"\bcrocin\b",           # needs pharmacist review
+    r"\bcalpol\b",           # needs pharmacist review
+    r"\bcombiflam\b"         # needs pharmacist review
+]
+HIGH_RISK_PROHIBITED_DRUGS = HIGH_RISK_DRUG_PATTERNS
+
+CLINICAL_DEFERRAL_TEXT = "Please discuss any medication choices directly with your doctor or pharmacist."
+
+# Universal dosing patterns: catches exact dosages, frequencies, and schedules
+# while carefully preserving non-drug quantities (e.g. 250 ml of water, 5 g of protein).
+DOSING_NUM_PATTERNS = [
+    # 1. Exact drug quantities: mg, mcg, etc.
+    re.compile(r"\b(?:half|quarter|one|two|three|four|five|\d+(?:\.\d+)?(?:\s*-\s*\d+(?:\.\d+)?)?)\s*(?:mg|milligrams?|mcg|micrograms?)\b", re.IGNORECASE),
+    # 2. Pill/tablet/capsule counts with word numbers, digit ranges, or fractions
+    re.compile(r"\b(?:take\s+)?(?:half|quarter|one|two|three|four|five|\d+(?:\s*-\s*\d+)?)\s*(?:a\s+)?(?:tablets?|pills?|capsules?|drops?|caplets?|lozenges?)\b", re.IGNORECASE),
+    # 3. Milliliters when NOT followed by water/fluids/juice/tea/soup/broth/milk/solution/electrolyte
+    re.compile(r"\b(?:take\s+)?(?:\d+(?:\.\d+)?)\s*(?:ml|milliliters?)(?!\s+of\s+(?:water|fluids?|juice|liquids?|tea|soup|broth|milk|solution|electrolyte))\b", re.IGNORECASE),
+    # 4. Frequencies and schedules: every N hours, qNh, once/twice daily, x times a day
+    re.compile(r"\bq\d+h\b", re.IGNORECASE),
+    re.compile(r"\bevery\s+(?:\d+|one|two|three|four|five|six|eight|twelve)(?:\s*(?:-|to)\s*\d+)?\s*(?:hours?|hrs?)\b", re.IGNORECASE),
+    re.compile(r"\b(?:once|twice|three\s+times|\d+\s*times)\s+(?:a\s+day|daily|per\s+day)\b", re.IGNORECASE),
+    re.compile(r"\btwice\s+daily\b", re.IGNORECASE),
+    re.compile(r"\bonce\s+daily\b", re.IGNORECASE)
+]
+
+# Position-aware prohibition patterns: prohibition word must appear BEFORE the drug within ~40 characters.
+# Restricts 'avoid' to 'avoid <drug>' forms so 'avoiding side effects' does not count.
+PROHIBITION_BEFORE_DRUG_PATTERNS = [
+    re.compile(
+        rf"\b(?:do\s+not(?:\s+take|\s+use|\s+administer|\s+give)?|"
+        rf"don'?t(?:\s+take|\s+use|\s+administer|\s+give)?|"
+        rf"never(?:\s+take|\s+use|\s+administer|\s+give)?|"
+        rf"should\s+not(?:\s+take|\s+use)?|"
+        rf"must\s+not(?:\s+take|\s+use|\s+be\s+taken)?|"
+        rf"avoid(?:\s+taking|\s+using)?|"
+        rf"contraindicated(?:\s+for|\s+in)?|"
+        rf"prohibited(?:\s+to\s+take)?)\b[\w\s]{{0,40}}{drug_pat}",
+        re.IGNORECASE
+    )
+    for drug_pat in HIGH_RISK_DRUG_PATTERNS
+]
+
+# Drug followed directly by is/are contraindicated/prohibited
+DRUG_IS_CONTRAINDICATED_PATTERNS = [
+    re.compile(
+        rf"{drug_pat}[\w\s]{{0,25}}\b(?:is|are)\s+(?:contraindicated|strictly\s+prohibited|prohibited)\b",
+        re.IGNORECASE
+    )
+    for drug_pat in HIGH_RISK_DRUG_PATTERNS
+]
+
+# Permissive or recommending verbs directed at patient/treatment
+PERMISSIVE_VERBS_PAT = re.compile(
+    r"\b(?:you\s+)?(?:can|could|may|might|should|to)?\s*(?:take|try|use|administer|give|recommend|suggest|prescribe)\b|"
+    r"\b(?:recommended|suggested)\s+to\s+take\b",
+    re.IGNORECASE
+)
 
 # Decision-support language conversions (replace diagnostic phrases with decision-support phrasing)
 DIAGNOSTIC_LANGUAGE_REPLACEMENTS = [
@@ -444,66 +632,126 @@ def suppress_hallucinated_specialties(text: str, patient_state: Optional[Any] = 
 
 def suppress_specific_drug_dosing(text: str, patient_state: Optional[Any] = None) -> Tuple[str, bool]:
     """
-    Suppresses numeric drug dosing and specific drug names across all patient interactions.
-    - High-risk patients: drops the entire recommending sentence and defers to care team.
-    - Routine/Urgent patients: replaces specific drug names with generic symptom categories ("an over-the-counter fever reducer") and defers dosing/choice to pharmacist.
+    Suppresses numeric drug dosing universally for all users, and intercepts specific drug
+    names for high-risk patients (cancer/immunosuppressed, pregnancy, pediatrics):
+    - Universal: numeric dosages and dosing schedules (tablets, mg, q8h, once/twice daily)
+      are suppressed without mangling non-drug quantities (e.g. 250 ml of water, 5 g of protein).
+    - High-risk (cancer/chemo/immunosuppressed): strict antipyretic interception replacing
+      recommending/permissive sentences with deferral text while preserving explicit prohibitions intact.
+    - High-risk (pregnancy/pediatrics): replaces recommending/instructing sentences with deferral text;
+      preserves purely descriptive informational sentences (e.g. 'Paracetamol is used to reduce fever').
+    - Standard risk: allows drug names in informational context ('what is paracetamol used for?').
     Returns: (cleaned_text, was_dosing_suppressed)
     """
     cleaned = text
     dosing_suppressed = False
 
-    # 1. Regex scan for numeric dosages (e.g. 10mg, 650mg, 2 tablets, q8h, every 6 hours)
-    dosing_num_patterns = [
-        r"\b\d+(\.\d+)?\s*(mg|milligrams?|mcg|ml|tablets?|pills?|capsules?)\b",
-        r"\bq\d+h\b",
-        r"\bevery\s+\d+\s*(to\s+\d+\s*)?(hours?|hrs?)\b"
-    ]
-    for pattern in dosing_num_patterns:
-        if re.search(pattern, cleaned, re.IGNORECASE):
+    # 1. Regex scan for numeric dosages and administration schedules (Universal)
+    for pattern in DOSING_NUM_PATTERNS:
+        if pattern.search(cleaned):
             dosing_suppressed = True
-            cleaned = re.sub(pattern, "[consult pharmacist or physician for dosage]", cleaned, flags=re.IGNORECASE)
+            cleaned = pattern.sub("[consult pharmacist or physician for dosage]", cleaned)
 
-    # 2. Check for specific prohibited drug names (UNIVERSAL BAN)
+    # Collapse consecutive placeholder repetitions
+    cleaned = re.sub(
+        r"(\[consult pharmacist or physician for dosage\]\s*)+",
+        "[consult pharmacist or physician for dosage] ",
+        cleaned
+    ).strip()
+    cleaned = re.sub(r"\s+([.!?])", r"\1", cleaned)
+
+    # 2. Check patient risk profile
     is_high_risk = False
+    is_cancer_or_immuno = False
+    is_preg_or_peds = False
+
     if patient_state:
-        disclosed = [str(c).lower() for c in getattr(patient_state, "disclosed_conditions", [])]
-        conds = [str(c).lower() for c in getattr(patient_state, "conditions", [])]
-        all_conds = disclosed + conds
-        is_high_risk = (
-            getattr(patient_state, "is_active_cancer_chemo", False)
-            or any("cancer" in c or "chemo" in c for c in all_conds)
-            or getattr(patient_state, "is_immunocompromised", False)
-            or getattr(patient_state, "is_pregnant", False)
-            or (getattr(patient_state, "age", None) is not None and getattr(patient_state, "age") < 12)
-            or getattr(patient_state, "is_infant_under_3mo", False)
+        if isinstance(patient_state, dict):
+            disclosed = [str(c).lower() for c in patient_state.get("disclosed_conditions", [])]
+            conds = [str(c).lower() for c in patient_state.get("conditions", [])]
+            all_conds = disclosed + conds
+            has_cancer = bool(
+                patient_state.get("has_cancer_history")
+                or patient_state.get("is_active_cancer_chemo")
+                or any("cancer" in c or "chemo" in c for c in all_conds)
+            )
+            has_immuno = bool(patient_state.get("is_immunocompromised") or any("immuno" in c for c in all_conds))
+            has_preg = bool(patient_state.get("is_pregnant") or any("pregnan" in c for c in all_conds))
+            has_peds = is_pediatric(patient_state)
+        else:
+            disclosed = [str(c).lower() for c in getattr(patient_state, "disclosed_conditions", [])]
+            conds = [str(c).lower() for c in getattr(patient_state, "conditions", [])]
+            all_conds = disclosed + conds
+            has_cancer = bool(
+                getattr(patient_state, "has_cancer_history", False)
+                or getattr(patient_state, "is_active_cancer_chemo", False)
+                or any("cancer" in c or "chemo" in c for c in all_conds)
+            )
+            has_immuno = bool(getattr(patient_state, "is_immunocompromised", False) or any("immuno" in c for c in all_conds))
+            has_preg = bool(getattr(patient_state, "is_pregnant", False) or any("pregnan" in c for c in all_conds))
+            has_peds = is_pediatric(patient_state)
+
+        is_cancer_or_immuno = has_cancer or has_immuno
+        is_preg_or_peds = has_preg or has_peds
+        is_high_risk = is_cancer_or_immuno or is_preg_or_peds
+
+    if not is_high_risk:
+        cleaned = re.sub(r"\s{2,}", " ", cleaned).strip()
+        return cleaned, dosing_suppressed
+
+    # 3. Evaluate drug mentions sentence-by-sentence using shared splitter
+    sentences = split_into_sentences(cleaned)
+    processed_sentences: List[str] = []
+    deferral_added = False
+
+    for sent in sentences:
+        sent_lower = sent.lower()
+        # Does this sentence mention any restricted high-risk drug?
+        matched_drug_indices = [
+            i for i, drug_pat in enumerate(HIGH_RISK_DRUG_PATTERNS)
+            if re.search(drug_pat, sent_lower)
+        ]
+
+        if not matched_drug_indices:
+            processed_sentences.append(sent)
+            continue
+
+        dosing_suppressed = True
+
+        # Position-aware prohibition check: prohibition must appear BEFORE drug within ~40 chars
+        has_prohibition = any(
+            PROHIBITION_BEFORE_DRUG_PATTERNS[idx].search(sent_lower)
+            or DRUG_IS_CONTRAINDICATED_PATTERNS[idx].search(sent_lower)
+            for idx in matched_drug_indices
         )
 
-    # Check if ANY prohibited drug name appears
-    has_prohibited_drug = any(re.search(pat, cleaned, re.IGNORECASE) for pat in UNIVERSALLY_PROHIBITED_DRUGS)
+        # Check for permissive / recommending verbs
+        # Strip prohibition clauses first so 'take' in 'do not take' does not trigger permissive
+        s_no_prohib = sent_lower
+        for idx in matched_drug_indices:
+            s_no_prohib = PROHIBITION_BEFORE_DRUG_PATTERNS[idx].sub("", s_no_prohib)
+            s_no_prohib = DRUG_IS_CONTRAINDICATED_PATTERNS[idx].sub("", s_no_prohib)
+        s_no_prohib = re.sub(r"\b(?:do\s+not|don'?t|never|should\s+not|must\s+not|avoid)\s+\w+", "", s_no_prohib)
+        has_permissive = bool(PERMISSIVE_VERBS_PAT.search(s_no_prohib))
 
-    if has_prohibited_drug and is_high_risk:
-        dosing_suppressed = True
-        # High-risk: Drop sentence recommending the drug, but PRESERVE explicit prohibitions
-        for drug_pat in UNIVERSALLY_PROHIBITED_DRUGS:
-            if re.search(drug_pat, cleaned, re.IGNORECASE):
-                def _replace_if_recommending(match):
-                    sentence_text = match.group(0)
-                    if re.search(
-                        r"\b(do\s+not|don\'?t|never|avoid|contraindicated|should\s+not|must\s+not|prohibited)\b",
-                        sentence_text,
-                        re.IGNORECASE
-                    ):
-                        return sentence_text  # Preserve prohibition sentence
-                    return " Please discuss any medication choices directly with your doctor or pharmacist."
+        # Rule 1: If sentence has both prohibition and permissive verb, treat as permissive
+        # Rule 2: If position-aware prohibition holds with NO permissive verb -> KEEP intact
+        if has_prohibition and not has_permissive:
+            processed_sentences.append(sent)
+            continue
 
-                cleaned = re.sub(
-                    r"([^.\n]*?" + drug_pat[2:-2] + r"[^.\n]*?\.)",
-                    _replace_if_recommending,
-                    cleaned,
-                    flags=re.IGNORECASE
-                )
+        # Rule 3: For pregnancy and pediatric cases, descriptive informational sentences
+        # (e.g. "Paracetamol is used to reduce fever") stay intact without instruction.
+        if is_preg_or_peds and not is_cancer_or_immuno and not has_permissive:
+            processed_sentences.append(sent)
+            continue
 
-    # Clean up duplicate whitespace
+        # Rule 4: Recommending / permissive sentence to high-risk patient -> replace with deferral
+        if not deferral_added:
+            processed_sentences.append(f" {CLINICAL_DEFERRAL_TEXT}")
+            deferral_added = True
+
+    cleaned = "".join(processed_sentences)
     cleaned = re.sub(r"\s{2,}", " ", cleaned).strip()
     return cleaned, dosing_suppressed
 
