@@ -18,46 +18,9 @@ from flask_login import login_required, current_user
 from livekit.api import LiveKitAPI, CreateAgentDispatchRequest
 
 from livekit_token import generate_livekit_token
-from research.src.auth import db, User, Message
-from research.src.memory import get_user_memory
-from research.src.intent_classifier import classify_intent
-from services.ai_service import (
-    chatModel,
-    classifierModel,
-    retriever,
-    is_prompt_injection,
-    build_prompt,
-    PatientState,
-    extract_patient_state,
-    evaluate_triage_tier,
-    check_medication_contraindications
-)
-from research.src.clinical_triage import check_mid_conversation_correction
-from services.chat_service import (
-    build_history_text,
-    update_memory_in_background,
-    update_title_in_background,
-    get_active_session_for_user,
-    generate_voice_response,
-    load_patient_state,
-    save_patient_state,
-)
-from services.task_dispatcher import (
-    enqueue_memory_update,
-    enqueue_title_update
-)
-from services.routing_service import route_query
-from services.llm_classifier import (
-    generate_greeting,
-    _is_greeting_sane,
-    get_static_greeting_fallback
-)
-from research.src.guardrails import apply_output_guardrails, NON_MEDICAL_REFUSAL
-from services.state_store import get_state_store, check_and_apply_ttl, check_emergency_resolution
-from services.output_guardrails import ClinicalOutputGuardrail, StreamingGuardrailProcessor
-from services.audit_logger import AuditLogger
-from research.src.clinical_parser import ClinicalEntityParser
-from research.src.clinical_triage import ClinicalTriageEngine
+from research.src.auth import User
+from services.chat_service import generate_voice_response
+from services.chat_pipeline import run_turn
 
 voice_bp = Blueprint("voice", __name__)
 

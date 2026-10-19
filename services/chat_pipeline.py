@@ -70,10 +70,15 @@ def _get_dep(name: str, default: Any, source_module: Optional[str] = None) -> An
     Retrieves dependency by name, honoring test mocks/patches across modules.
     Priority order:
     1. If routes.chat has an active mock/patch (hasattr _mock_name / assert_called), return it.
-    2. If source_module is specified and that module's attribute has an active mock or differs from default, return it.
-    3. If routes.chat defines the attribute, return it.
-    4. If source_module defines the attribute, return it.
-    5. Return default.
+    2. If services.chat_pipeline has an active mock/patch, return it.
+    3. If source_module is specified and that module's attribute has an active mock or differs from default, return it.
+    4. If routes.chat defines the attribute, return it.
+    5. If source_module defines the attribute, return it.
+    6. Return default.
+
+    TODO: Replace _get_dep dynamic resolution with standard top-level imports once
+    legacy unit test suites (e.g., tests/test_classifier_guardrails.py) are refactored
+    to patch services.chat_pipeline or origin modules directly instead of routes.chat.
     """
     chat_mod = sys.modules.get("routes.chat")
     if chat_mod is not None:
@@ -544,7 +549,7 @@ def _run_turn_sync(
             if not raw_answer or not raw_answer.strip():
                 raise ValueError("Empty retrieval response")
         except Exception as rag_err:
-            logger.info("[RAG] Retrieval fallback to direct clinical consultation: %s", rag_err)
+            logger.info("[RAG] Retrieval fallback to direct clinical consultation: %s", type(rag_err).__name__)
             direct_prompt = dynamic_prompt.format(
                 context="No reference material available; answer from general knowledge, do not cite sources.",
                 input=msg
@@ -625,7 +630,7 @@ def _run_turn_sync(
                 patient_state=patient_state.to_dict() if patient_state else None
             )
         except Exception as eval_err:
-            logger.warning("[EvalQueue] Failed to enqueue safety check: %s", eval_err)
+            logger.warning("[EvalQueue] Failed to enqueue safety check: %s", type(eval_err).__name__)
 
         # Shadow evaluation sampled on medical_query
         try:
@@ -639,7 +644,7 @@ def _run_turn_sync(
                     patient_state=patient_state.to_dict() if patient_state else None
                 )
         except Exception as eval_err:
-            logger.warning("[EvalQueue] Failed to enqueue turn eval: %s", eval_err)
+            logger.warning("[EvalQueue] Failed to enqueue turn eval: %s", type(eval_err).__name__)
 
     return answer
 
@@ -992,10 +997,10 @@ def _run_turn_stream(
                     patient_state=patient_state.to_dict() if patient_state else None
                 )
             except Exception as eval_err:
-                logger.warning("[EvalQueue] Failed to enqueue safety check: %s", eval_err)
+                logger.warning("[EvalQueue] Failed to enqueue safety check: %s", type(eval_err).__name__)
 
     except Exception as e:
-        logger.error(f"[run_turn_stream] Streaming error: {e}", exc_info=True)
+        logger.error("[run_turn_stream] Streaming error: %s", type(e).__name__)
         yield "Sorry, something went wrong on my end."
     finally:
         db.session.remove()

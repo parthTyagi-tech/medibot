@@ -233,7 +233,10 @@ def test_parity_numeric_dosing_suppression():
     mock_llm_text = "You should take 500mg or 1000mg every 6 hours with a glass of water."
     mock_chunks = [
         MockChunk("You should take "),
-        MockChunk("500mg or 1000mg "),
+        MockChunk("500"),
+        MockChunk("mg "),
+        MockChunk("or 1000"),
+        MockChunk("mg "),
         MockChunk("every 6 hours "),
         MockChunk("with a glass of water.")
     ]
@@ -257,6 +260,36 @@ def test_parity_numeric_dosing_suppression():
         assert "500mg" not in out
         assert "1000mg" not in out
         assert "[consult pharmacist or physician for dosage]" in out
+
+
+def test_parity_run_turn_with_none_user_and_session():
+    """Verify run_turn executes safely without exceptions when user=None and chat_session=None across all channels."""
+    query = "I have a mild tension headache."
+
+    mock_llm_text = "Rest in a quiet room and drink water."
+    mock_chunks = [MockChunk("Rest in a quiet "), MockChunk("room and drink water.")]
+
+    mock_rag_chain = MagicMock()
+    mock_rag_chain.invoke.return_value = {"answer": mock_llm_text, "context": []}
+
+    mock_retriever = MagicMock()
+    mock_retriever.invoke.return_value = []
+    mock_retriever.no_reference_mode = False
+
+    with patch("services.chat_pipeline.retriever", mock_retriever):
+        with patch("services.chat_pipeline.create_retrieval_chain", return_value=mock_rag_chain):
+            with patch.object(GroqChatModel, "invoke", return_value=MagicMock(content=mock_llm_text)):
+                with patch.object(GroqChatModel, "stream", return_value=iter(mock_chunks)):
+                    out_web = run_turn(query, user=None, chat_session=None, channel="web")
+                    out_voice = run_turn(query, user=None, chat_session=None, channel="voice")
+                    out_stream = "".join(list(run_turn(query, user=None, chat_session=None, channel="voice_stream")))
+
+    assert isinstance(out_web, str) and len(out_web) > 0
+    assert isinstance(out_voice, str) and len(out_voice) > 0
+    assert isinstance(out_stream, str) and len(out_stream) > 0
+    assert "rest in a quiet" in out_web.lower()
+    assert "rest in a quiet" in out_voice.lower()
+    assert "rest in a quiet" in out_stream.lower()
 
 
 def test_parity_non_medical_refusal():

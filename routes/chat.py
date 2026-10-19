@@ -33,55 +33,28 @@ def is_greeting_text(text: str) -> bool:
     return any(bool(re.search(pat, cleaned)) for pat in GREETING_PATTERNS)
 
 
-from langchain.chains import create_retrieval_chain
-from langchain.chains.combine_documents import create_stuff_documents_chain
-
 from research.src.auth import db, ChatSession, Message
 from research.src.memory import get_user_memory, clear_user_memory
 from deepgram_tts import text_to_speech
+from services.chat_service import get_active_session
+from services.chat_pipeline import run_turn
+
+# Backward-compatibility import targets for legacy unit test patches
+# TODO: Remove once legacy tests are updated to patch services.chat_pipeline or origin modules directly
+from langchain.chains import create_retrieval_chain
 from research.src.clinical_triage import (
     PatientState,
     ClinicalTriageEngine,
-    format_context_aware_greeting,
     extract_patient_state,
     evaluate_triage_tier,
-    check_medication_contraindications,
-    check_mid_conversation_correction,
-    friendly_emergency_label,
-    maybe_append_emergency_reminder
-)
-from research.src.intent_classifier import is_third_party_query
-from services.chat_service import (
-    get_active_session,
-    build_history_text,
-    update_memory_in_background,
-    update_title_in_background,
-    summarize_session,
-    summarize_session_in_background,
-    load_patient_state,
-    save_patient_state,
 )
 from services.task_dispatcher import (
     enqueue_memory_update,
     enqueue_title_update,
     enqueue_session_summarize,
     enqueue_eval_safety_check,
-    enqueue_eval_turn
 )
-from services.state_store import (
-    get_state_store,
-    check_and_apply_ttl,
-    check_emergency_resolution
-)
-from services.output_guardrails import ClinicalOutputGuardrail
-from services.audit_logger import AuditLogger
-from research.src.clinical_parser import ClinicalEntityParser
-from services.routing_service import route_query, RouteDecision
-from services.llm_classifier import (
-    generate_greeting,
-    _is_greeting_sane,
-    get_static_greeting_fallback
-)
+from services.llm_classifier import generate_greeting
 
 
 @chat_bp.route("/health", methods=["GET"])

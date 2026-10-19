@@ -4,8 +4,6 @@ import traceback
 from datetime import datetime, timezone
 from flask import session
 from flask_login import current_user
-from langchain.chains import create_retrieval_chain
-from langchain.chains.combine_documents import create_stuff_documents_chain
 
 from research.src.auth import db, User, ChatSession, Message
 from research.src.memory import get_user_memory, update_user_memory
@@ -257,5 +255,5 @@ def generate_voice_response(msg: str, user=None) -> str:
         logger.info(f"[generate_voice_response] DONE - returning ({len(final_answer)} chars): '{final_answer[:80]}...'")
         return final_answer
     except Exception as e:
-        logger.error(f"[generate_voice_response] EXCEPTION: {e}", exc_info=True)
+        logger.error("[generate_voice_response] EXCEPTION: %s", type(e).__name__)
         return "I am ready to assist with your medical questions."
