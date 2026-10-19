@@ -207,9 +207,12 @@ def test_streaming_parity_with_non_streaming_sanitization():
     stream_yielded = "".join(processor.process_stream(chunks))
 
     # Parity assertions:
-    # 1. 650mg and every 6 hours suppressed
-    assert "[consult pharmacist or physician for dosage]" in stream_yielded
-    assert "[consult pharmacist or physician for dosage]" in non_stream_final
+    # 1. 650mg and every 6 hours suppressed/replaced
+    assert "650mg" not in stream_yielded
+    assert "650mg" not in non_stream_final
+    assert "every 6 hours" not in stream_yielded
+    assert "every 6 hours" not in non_stream_final
+    assert stream_yielded == non_stream_final
     # 2. BRAT diet scrubbed
     assert "a balanced, nutrient-dense diet" in stream_yielded
     assert "a balanced, nutrient-dense diet" in non_stream_final

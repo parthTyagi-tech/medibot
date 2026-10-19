@@ -49,6 +49,7 @@ def get_groq_api_keys() -> List[str]:
 from research.src.guardrails import (
     is_code_or_programming_request,
     apply_output_guardrails,
+    GREETING_PROHIBITED_DRUGS,
     UNIVERSALLY_PROHIBITED_DRUGS
 )
 from research.src.intent_classifier import MEDICAL_KEYWORDS, NON_MEDICAL_KEYWORDS
@@ -455,7 +456,7 @@ def _is_greeting_sane(text: str) -> bool:
         return False
 
     # 3. Reject prohibited drug names
-    for pat in UNIVERSALLY_PROHIBITED_DRUGS:
+    for pat in GREETING_PROHIBITED_DRUGS:
         if re.search(pat, cleaned, re.IGNORECASE):
             return False
 

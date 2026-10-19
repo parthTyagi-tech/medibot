@@ -497,8 +497,18 @@ HIGH_RISK_DRUG_PATTERNS = [
     r"\bcombiflam\b"         # needs pharmacist review
 ]
 HIGH_RISK_PROHIBITED_DRUGS = HIGH_RISK_DRUG_PATTERNS
-
 CLINICAL_DEFERRAL_TEXT = "Please discuss any medication choices directly with your doctor or pharmacist."
+
+CLINICAL_OVERRIDE_TEXT = (
+    "CRITICAL SAFETY OVERRIDE: DO NOT take over-the-counter fever-reducing medications "
+    "(such as acetaminophen, paracetamol, or ibuprofen) without explicit instruction from your oncologist, "
+    "as they can mask serious infections."
+)
+
+ANTIPYRETIC_NAMES = frozenset({
+    "acetaminophen", "paracetamol", "tylenol", "ibuprofen", "advil", "motrin", "aspirin", "naproxen", "aleve",
+    "diclofenac", "nimesulide", "mefenamic", "crocin", "calpol", "combiflam", "dolo"
+})
 
 # Universal dosing patterns: catches exact dosages, frequencies, and schedules
 # while carefully preserving non-drug quantities (e.g. 250 ml of water, 5 g of protein).
@@ -644,12 +654,12 @@ def suppress_specific_drug_dosing(text: str, patient_state: Optional[Any] = None
     Returns: (cleaned_text, was_dosing_suppressed)
     """
     cleaned = text
-    dosing_suppressed = False
+    numeric_dosing_suppressed = False
 
     # 1. Regex scan for numeric dosages and administration schedules (Universal)
     for pattern in DOSING_NUM_PATTERNS:
         if pattern.search(cleaned):
-            dosing_suppressed = True
+            numeric_dosing_suppressed = True
             cleaned = pattern.sub("[consult pharmacist or physician for dosage]", cleaned)
 
     # Collapse consecutive placeholder repetitions
@@ -697,12 +707,13 @@ def suppress_specific_drug_dosing(text: str, patient_state: Optional[Any] = None
 
     if not is_high_risk:
         cleaned = re.sub(r"\s{2,}", " ", cleaned).strip()
-        return cleaned, dosing_suppressed
+        return cleaned, numeric_dosing_suppressed
 
     # 3. Evaluate drug mentions sentence-by-sentence using shared splitter
     sentences = split_into_sentences(cleaned)
     processed_sentences: List[str] = []
     deferral_added = False
+    drug_suppressed = False
 
     for sent in sentences:
         sent_lower = sent.lower()
@@ -716,7 +727,7 @@ def suppress_specific_drug_dosing(text: str, patient_state: Optional[Any] = None
             processed_sentences.append(sent)
             continue
 
-        dosing_suppressed = True
+        drug_suppressed = True
 
         # Position-aware prohibition check: prohibition must appear BEFORE drug within ~40 chars
         has_prohibition = any(
@@ -748,12 +759,19 @@ def suppress_specific_drug_dosing(text: str, patient_state: Optional[Any] = None
 
         # Rule 4: Recommending / permissive sentence to high-risk patient -> replace with deferral
         if not deferral_added:
-            processed_sentences.append(f" {CLINICAL_DEFERRAL_TEXT}")
+            is_antipyretic_match = any(
+                any(med in HIGH_RISK_DRUG_PATTERNS[idx] for med in ANTIPYRETIC_NAMES)
+                for idx in matched_drug_indices
+            )
+            if is_cancer_or_immuno and is_antipyretic_match:
+                processed_sentences.append(f" **{CLINICAL_OVERRIDE_TEXT}** ")
+            else:
+                processed_sentences.append(f" {CLINICAL_DEFERRAL_TEXT} ")
             deferral_added = True
 
     cleaned = "".join(processed_sentences)
     cleaned = re.sub(r"\s{2,}", " ", cleaned).strip()
-    return cleaned, dosing_suppressed
+    return cleaned, numeric_dosing_suppressed
 
 
 def requires_fixed_emergency_response(patient_state: Optional[Any], triage_tier: str, validator_flags: Dict[str, bool]) -> Optional[str]:

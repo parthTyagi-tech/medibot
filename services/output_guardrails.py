@@ -16,7 +16,11 @@ from research.src.clinical_triage import PatientState
 from research.src.guardrails import (
     apply_output_guardrails,
     apply_sentence_guardrails,
-    requires_fixed_emergency_response
+    requires_fixed_emergency_response,
+    find_sentence_boundary,
+    split_into_sentences,
+    is_pediatric,
+    ABBREVIATIONS
 )
 
 logger = logging.getLogger(__name__)
@@ -53,12 +57,13 @@ class ClinicalOutputGuardrail:
     Guarantees prompt leakage and hallucinated contraindications never reach users.
     """
 
-    ANTIPYRETIC_PATTERN = r"\b(tylenol|paracetamol|acetaminophen|ibuprofen|advil|motrin|aspirin|aleve|naproxen)\b"
-
     FORBIDDEN_ANTIPYRETICS = [
         "acetaminophen", "paracetamol", "tylenol", "ibuprofen",
-        "advil", "motrin", "aspirin", "naproxen", "aleve"
+        "advil", "motrin", "aspirin", "naproxen", "aleve",
+        "diclofenac", "nimesulide", "mefenamic acid", "crocin", "calpol", "combiflam"
     ]
+
+    ANTIPYRETIC_PATTERN = r"\b(" + "|".join(FORBIDDEN_ANTIPYRETICS) + r")\b"
 
     PERMISSIVE_MED_PATTERNS = [
         rf"\b(take|try|use|consider|administer|give|suggest|recommend)\s+[\w\s]{{0,25}}\b({('|').join(FORBIDDEN_ANTIPYRETICS)})\b",
@@ -153,49 +158,81 @@ class ClinicalOutputGuardrail:
             antipyretic_matches = list(re.finditer(cls.ANTIPYRETIC_PATTERN, lower_text))
             
             if antipyretic_matches:
-                # Check if it already has an unambiguous prohibition
-                has_prohibition = bool(
-                    re.search(
-                        r"\b(do\s+not\s+take|don\'?t\s+take|avoid|never\s+take|contraindicated|should\s+not\s+take|must\s+not\s+be\s+taken|prohibited|do\s+not\s+use|don\'?t\s+use)\b"
-                        r"[\w\s]{0,45}(" + "|".join(cls.FORBIDDEN_ANTIPYRETICS) + r"|fever\s+reducers?)",
-                        lower_text
+                sentences = split_into_sentences(sanitized)
+                cleaned_sentences = []
+                any_prohibition_anywhere = False
+                override_placed = False
+
+                for sent in sentences:
+                    if cls.CLINICAL_OVERRIDE_TEXT in sent:
+                        cleaned_sentences.append(sent)
+                        override_placed = True
+                        continue
+
+                    s_lower = sent.lower()
+                    sent_matches = list(re.finditer(cls.ANTIPYRETIC_PATTERN, s_lower))
+                    if not sent_matches:
+                        cleaned_sentences.append(sent)
+                        continue
+
+                    # Position-aware prohibition check within sentence
+                    has_sent_prohibition = bool(
+                        re.search(
+                            r"\b(do\s+not(?:\s+take|\s+use)?|"
+                            r"don\'?t(?:\s+take|\s+use)?|"
+                            r"avoid(?:\s+taking|\s+using)?|"
+                            r"never(?:\s+take|\s+use)?|"
+                            r"contraindicated(?:\s+for|\s+in)?|"
+                            r"should\s+not(?:\s+take|\s+use)?|"
+                            r"must\s+not(?:\s+take|\s+use|\s+be\s+taken)?|"
+                            r"prohibited(?:\s+to\s+take)?|"
+                            r"do\s+not\s+give|don\'?t\s+give)\b"
+                            r"[\w\s]{0,45}(" + "|".join(cls.FORBIDDEN_ANTIPYRETICS) + r"|fever\s+reducers?)",
+                            s_lower
+                        )
                     )
-                )
+                    if has_sent_prohibition:
+                        any_prohibition_anywhere = True
 
-                def _is_permissive(line_str: str) -> bool:
-                    l = line_str.lower()
-                    if re.search(
-                        r"\b(do\s+not\s+take|don\'?t\s+take|avoid|never\s+take|contraindicated|should\s+not\s+take|must\s+not\s+be\s+taken|prohibited|do\s+not\s+use|don\'?t\s+use)\b"
-                        r"[\w\s]{0,45}(" + "|".join(cls.FORBIDDEN_ANTIPYRETICS) + r"|fever\s+reducers?)",
-                        l
-                    ):
-                        return False
-                    return any(bool(re.search(pat, l)) for pat in cls.PERMISSIVE_MED_PATTERNS)
+                    # Check for permissive verb/recommendation
+                    s_no_prohib = s_lower
+                    if has_sent_prohibition:
+                        s_no_prohib = re.sub(
+                            r"\b(do\s+not(?:\s+take|\s+use)?|"
+                            r"don\'?t(?:\s+take|\s+use)?|"
+                            r"avoid(?:\s+taking|\s+using)?|"
+                            r"never(?:\s+take|\s+use)?|"
+                            r"contraindicated(?:\s+for|\s+in)?|"
+                            r"should\s+not(?:\s+take|\s+use)?|"
+                            r"must\s+not(?:\s+take|\s+use|\s+be\s+taken)?|"
+                            r"prohibited(?:\s+to\s+take)?|"
+                            r"do\s+not\s+give|don\'?t\s+give)\b"
+                            r"[\w\s]{0,45}(" + "|".join(cls.FORBIDDEN_ANTIPYRETICS) + r"|fever\s+reducers?)",
+                            "",
+                            s_no_prohib
+                        )
+                    s_no_prohib = re.sub(r"\b(?:do\s+not|don'?t|never|should\s+not|must\s+not|avoid)\s+\w+", "", s_no_prohib)
+                    has_sent_permissive = any(bool(re.search(pat, s_no_prohib)) for pat in cls.PERMISSIVE_MED_PATTERNS)
 
-                has_permissive = _is_permissive(lower_text)
+                    # If sentence is permissive or lacks prohibition, replace it
+                    if has_sent_permissive or not has_sent_prohibition:
+                        triggered = True
+                        trigger_reasons.append("FORBIDDEN_ANTIPYRETIC_INTERCEPTION")
+                        for m in sent_matches:
+                            intercepted_tokens.append(m.group(0))
 
-                if has_permissive or not has_prohibition:
-                    triggered = True
-                    trigger_reasons.append("FORBIDDEN_ANTIPYRETIC_INTERCEPTION")
-                    for m in antipyretic_matches:
-                        intercepted_tokens.append(m.group(0))
+                        if not override_placed:
+                            cleaned_sentences.append(f" **{cls.CLINICAL_OVERRIDE_TEXT}** ")
+                            override_placed = True
+                    else:
+                        # Sentence has position-aware prohibition and no permissive verb -> KEEP intact
+                        cleaned_sentences.append(sent)
 
-                    logger.critical(
-                        "[Guardrail] CRITICAL INTERCEPTION: Permissive antipyretic detected for oncology patient! Enforcing override..."
-                    )
+                sanitized = "".join(cleaned_sentences).strip()
 
-                    # Replace permissive lines with safe directive
-                    lines = sanitized.split("\n")
-                    cleaned_lines = []
-                    for line in lines:
-                        if _is_permissive(line):
-                            cleaned_lines.append(f"**{cls.CLINICAL_OVERRIDE_TEXT}**")
-                        else:
-                            cleaned_lines.append(line)
-                    sanitized = "\n".join(cleaned_lines)
-
-                    if not has_prohibition and cls.CLINICAL_OVERRIDE_TEXT not in sanitized:
-                        sanitized += f"\n\n**{cls.CLINICAL_OVERRIDE_TEXT}**"
+                # If antipyretic was mentioned, no prohibition anywhere in text, and override not yet present, append once
+                if not any_prohibition_anywhere and cls.CLINICAL_OVERRIDE_TEXT not in sanitized:
+                    sanitized += f"\n\n**{cls.CLINICAL_OVERRIDE_TEXT}**"
 
         reason_str = "; ".join(trigger_reasons) if trigger_reasons else None
         tokens_str = ", ".join(intercepted_tokens) if intercepted_tokens else None
@@ -208,58 +245,13 @@ class ClinicalOutputGuardrail:
         )
 
 
-ABBREVIATIONS = frozenset({
-    "dr", "mr", "mrs", "ms", "prof", "vs", "eg", "ie", "etc", "approx", "no", "dept", "vol", "fig"
-})
-
-
-def find_sentence_boundary(buffer: str) -> Optional[int]:
-    """
-    Finds the end index of the first completed sentence in buffer,
-    avoiding decimal numbers (10.5 mg) and abbreviations (Dr., vs., e.g.).
-    Returns index to split at (inclusive of delimiter and trailing space), or None.
-    """
-    pattern = re.compile(r"([.!?]+(?:\s+|\n+)|[\n]{2,})")
-    pos = 0
-    while True:
-        match = pattern.search(buffer, pos)
-        if not match:
-            break
-        punct_start = match.start()
-        punct_char = buffer[punct_start]
-
-        if punct_char == ".":
-            # 1. Decimal check: digits immediately before and after
-            if punct_start > 0 and punct_start + 1 < len(buffer):
-                if buffer[punct_start - 1].isdigit() and buffer[punct_start + 1].isdigit():
-                    pos = match.end()
-                    continue
-
-            # 2. Abbreviation check: examine preceding word
-            prefix = buffer[:punct_start]
-            words = re.findall(r"[A-Za-z]+", prefix)
-            if words:
-                last_word = words[-1].lower()
-                if last_word in ABBREVIATIONS:
-                    pos = match.end()
-                    continue
-                # Also check multi-part abbreviations like e.g. or i.e.
-                if len(words) >= 2 and f"{words[-2].lower()}.{words[-1].lower()}" in {"e.g", "i.e"}:
-                    pos = match.end()
-                    continue
-
-        return match.end()
-
-    return None
-
-
 def is_patient_high_risk(
     patient_state: Union[PatientState, Dict[str, Any], None],
     risk_tier: str = "Routine"
 ) -> bool:
     """
     Returns True if the patient is high-risk (cancer history, immunocompromised, pregnant,
-    child <12, infant <3mo, or risk_tier == 'Emergency'), requiring full-response buffering.
+    pediatric, or risk_tier == 'Emergency'), requiring full-response buffering.
     Returns False for standard-risk patients who can be safely sentence-streamed.
     """
     if str(risk_tier).upper() == "EMERGENCY":
@@ -276,8 +268,7 @@ def is_patient_high_risk(
         )
         is_immunocompromised = bool(patient_state.get("is_immunocompromised"))
         is_pregnant = bool(patient_state.get("is_pregnant"))
-        age = patient_state.get("age")
-        is_child = (age is not None and age < 12) or bool(patient_state.get("is_infant_under_3mo"))
+        is_child = is_pediatric(patient_state)
         return bool(has_cancer or is_immunocompromised or is_pregnant or is_child)
     else:
         disclosed = [str(c).lower() for c in getattr(patient_state, "disclosed_conditions", [])]
@@ -290,8 +281,7 @@ def is_patient_high_risk(
         )
         is_immunocompromised = getattr(patient_state, "is_immunocompromised", False)
         is_pregnant = getattr(patient_state, "is_pregnant", False)
-        age = getattr(patient_state, "age", None)
-        is_child = (age is not None and age < 12) or getattr(patient_state, "is_infant_under_3mo", False)
+        is_child = is_pediatric(patient_state)
         return bool(has_cancer or is_immunocompromised or is_pregnant or is_child)
 
 
