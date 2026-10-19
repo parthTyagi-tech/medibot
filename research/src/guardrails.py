@@ -668,7 +668,7 @@ def suppress_specific_drug_dosing(text: str, patient_state: Optional[Any] = None
         "[consult pharmacist or physician for dosage] ",
         cleaned
     ).strip()
-    cleaned = re.sub(r"\s+([.!?])", r"\1", cleaned)
+    cleaned = re.sub(r"(\[consult pharmacist or physician for dosage\])\s+([.!?])", r"\1\2", cleaned)
 
     # 2. Check patient risk profile
     is_high_risk = False
