@@ -23,15 +23,13 @@ from research.src.clinical_triage import (
     maybe_append_emergency_reminder,
 )
 from research.src.clinical_parser import ClinicalEntityParser
-from research.src.intent_classifier import is_third_party_query
+from research.src.intent_classifier import classify_intent, is_third_party_query
+from research.src.guardrails import apply_output_guardrails, NON_MEDICAL_REFUSAL
 from services.ai_service import (
     chatModel,
     classifierModel,
     retriever,
     build_prompt,
-    classify_intent,
-    apply_output_guardrails,
-    NON_MEDICAL_REFUSAL,
 )
 from services.routing_service import route_query, RouteDecision
 from services.llm_classifier import (
