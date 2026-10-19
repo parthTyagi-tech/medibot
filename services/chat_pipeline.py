@@ -81,6 +81,12 @@ def _get_dep(name: str, default: Any, source_module: Optional[str] = None) -> An
         if chat_val is not None and (hasattr(chat_val, "_mock_name") or hasattr(chat_val, "assert_called")):
             return chat_val
 
+    pipe_mod = sys.modules.get("services.chat_pipeline")
+    if pipe_mod is not None:
+        pipe_val = getattr(pipe_mod, name, None)
+        if pipe_val is not None and (hasattr(pipe_val, "_mock_name") or hasattr(pipe_val, "assert_called")):
+            return pipe_val
+
     if source_module and source_module in sys.modules:
         src_mod = sys.modules[source_module]
         src_val = getattr(src_mod, name, None)
@@ -316,7 +322,7 @@ def _run_turn_sync(
     patient_state.transient_symptoms = signals.get("active_symptoms", [])
 
     prev_snapshot = patient_state.get_diff_snapshot()
-    extract_ps_fn = _get_dep("extract_patient_state", extract_patient_state)
+    extract_ps_fn = _get_dep("extract_patient_state", extract_patient_state, "research.src.clinical_triage")
     # UNIFIED: Both web and voice use structured LLM extraction via classifierModel
     patient_state = extract_ps_fn(msg, patient_state, llm=classifierModel)
     has_new_structured_fact = patient_state.has_state_diff(prev_snapshot)
@@ -761,7 +767,7 @@ def _run_turn_stream(
         patient_state.transient_symptoms = signals.get("active_symptoms", [])
 
         prev_snapshot = patient_state.get_diff_snapshot()
-        extract_ps_fn = _get_dep("extract_patient_state", extract_patient_state)
+        extract_ps_fn = _get_dep("extract_patient_state", extract_patient_state, "research.src.clinical_triage")
         # UNIFIED: Both web and voice use structured LLM extraction via classifierModel
         patient_state = extract_ps_fn(msg, patient_state, llm=classifierModel)
         has_new_structured_fact = patient_state.has_state_diff(prev_snapshot)
