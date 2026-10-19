@@ -1088,15 +1088,19 @@ def check_medication_contraindications(state: PatientState, user_msg: str) -> Tu
     """
     text = user_msg.lower()
     is_dosing_request = any(re.search(p, text) for p in DOSING_REQUEST_PATTERNS)
-    is_drug_inquiry = bool(re.search(r"\b(can\s+i\s+take|what\s+medicine|give\s+me|prescribe|which\s+(medicine|drug|pill)|take\s+(paracetamol|tylenol|ibuprofen|advil|aspirin|dolo|cough\s+syrup))\b", text))
+    is_drug_inquiry = bool(re.search(
+        r"\b(can\s+i\s+(?:take|give|use)|what\s+medicine|give\s+me|prescribe|which\s+(medicine|drug|pill)|(?:take|give|use)\s+(paracetamol|tylenol|ibuprofen|advil|aspirin|dolo|cough\s+syrup))\b",
+        text
+    ) or any(d in text for d in ["paracetamol", "acetaminophen", "ibuprofen", "advil", "tylenol", "aspirin", "dolo"]))
 
+    from research.src.guardrails import is_pediatric
+    is_ped = is_pediatric(state)
     is_high_risk = (
         state.is_active_cancer_chemo
         or any("cancer" in c.lower() or "chemo" in c.lower() for c in state.disclosed_conditions)
         or state.is_immunocompromised
         or state.is_pregnant
-        or (state.age is not None and state.age < 12)
-        or state.is_infant_under_3mo
+        or is_ped
     )
 
     # Automatic block for high-risk populations whenever medication is raised or requested
@@ -1112,7 +1116,7 @@ def check_medication_contraindications(state: PatientState, user_msg: str) -> Tu
                 "⚠️ **MEDICATION SAFETY RESTRICTION (PREGNANCY)**: Many medications carry risks during pregnancy. "
                 "Specific medications and dosages cannot be recommended by AI. Please consult your obstetrician or pharmacist."
             )
-        if (state.age is not None and state.age < 12) or state.is_infant_under_3mo:
+        if is_ped:
             return True, (
                 "⚠️ **PEDIATRIC MEDICATION RESTRICTION**: Pediatric medication dosing is strictly weight-based (mg/kg) and must be "
                 "prescribed by a pediatrician. Exact drug dosages cannot be calculated safely here."
